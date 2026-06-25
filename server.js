@@ -916,7 +916,7 @@ app.get('/docs', (req, res) => {
         </div>
         <div class="card">
             <h2>Response (Obfuscated Code)</h2>
-            <div class="code-block">-- Obfuscated by Sttar Obfuscator https://obfuscator-api-bzc1.onrender.com/home
+            <div class="code-block">-- Obfuscated by Sttar Obfuscator https://sttar-obfuscators.onrender.com/home
 [... obfuscated Lua code ...]</div>
         </div>
         <div class="note">
