@@ -51,13 +51,6 @@ async function verifyRecaptcha(token) {
 const PROMETHEUS_CLI = path.join(__dirname, 'Prometheus', 'cli.lua');
 const TEMP_DIR = os.tmpdir();
 
-// Preset mapping: frontend -> Prometheus preset name
-const PRESETS = {
-    'Minify': 'Minify',
-    'Medium': 'Medium',
-    'High': 'High'
-};
-
 // ================== HELPER: execFile as Promise ==================
 function execFileAsync(cmd, args) {
     return new Promise((resolve, reject) => {
@@ -136,11 +129,11 @@ app.get('/', (req, res) => {
 </html>`);
 });
 
-// ================== OBFS API (WITH PRESET & ERROR DETAILS) ==================
+// ================== OBFS API (WITH RECAPTCHA, NO PRESET SELECT) ==================
 app.post('/api/obfuscate', async (req, res) => {
     const rawCode = req.body.code;
     const recaptchaToken = req.body.recaptchaToken;
-    const preset = PRESETS[req.body.preset] || 'Medium'; // default Medium
+    const preset = 'Medium';  // laging Medium
 
     if (!rawCode) {
         return res.status(400).json({ error: 'No code provided.' });
@@ -193,7 +186,6 @@ app.post('/api/obfuscate', async (req, res) => {
 
     } catch (err) {
         console.error("Obfuscation error:", err.stderr || err.message);
-        // Isama ang error details (stderr) kung available
         const detail = err.stderr ? err.stderr.toString().trim() : 'Unknown error';
         cleanup();
         return res.status(500).json({
@@ -203,7 +195,7 @@ app.post('/api/obfuscate', async (req, res) => {
     }
 });
 
-// ================== HOME PAGE (WITH NEW FEATURES) ==================
+// ================== HOME PAGE (WITH NEW FEATURES, NO PRESET SELECTOR) ==================
 app.get('/home', (req, res) => {
     res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -331,30 +323,19 @@ app.get('/home', (req, res) => {
             align-items: center;
             margin-bottom: 15px;
         }
-        .controls-row label {
-            color: var(--sub);
-            font-weight: 600;
-            font-size: 14px;
-        }
-        select, .file-upload-btn {
-            background: var(--textarea-bg);
-            border: 1px solid var(--textarea-border);
+        .file-upload-btn {
+            display: inline-block;
+            background: var(--action-bg);
+            border: 1px solid var(--action-border);
             color: var(--text);
             padding: 8px 14px;
             border-radius: 10px;
             font-size: 14px;
+            font-weight: 600;
             cursor: pointer;
             transition: border 0.3s;
         }
-        select:focus, .file-upload-btn:focus {
-            outline: none;
-            border-color: #bb86fc;
-        }
-        .file-upload-btn {
-            display: inline-block;
-            background: var(--action-bg);
-            border-color: var(--action-border);
-        }
+        .file-upload-btn:focus { border-color: #bb86fc; }
         textarea {
             width: 100%;
             height: clamp(200px, 50vh, 280px);
@@ -522,7 +503,6 @@ app.get('/home', (req, res) => {
             .action-btns { flex-direction: column; width: 100%; }
             .action-btns button, .action-btns a { text-align: center; }
             pre { font-size: 12px; }
-            .controls-row { flex-direction: column; align-items: flex-start; }
         }
     </style>
 </head>
@@ -535,14 +515,8 @@ app.get('/home', (req, res) => {
         <h1>Sttar Obfuscator</h1>
         <p class="subtitle">Paste your Lua code below and get obfuscated output instantly.</p>
 
-        <!-- Controls: Preset & Upload -->
+        <!-- File Upload -->
         <div class="controls-row">
-            <label for="presetSelect">Preset:</label>
-            <select id="presetSelect">
-                <option value="Minify">Minify</option>
-                <option value="Medium" selected>Medium</option>
-                <option value="High">High</option>
-            </select>
             <label for="fileUpload" class="file-upload-btn">
                 Upload .lua
                 <input type="file" id="fileUpload" accept=".lua" style="display:none">
@@ -578,7 +552,6 @@ app.get('/home', (req, res) => {
     <div class="toast" id="toast"></div>
 
     <script>
-        // DOM elements
         const input = document.getElementById('luaInput');
         const obfBtn = document.getElementById('obfBtn');
         const clearBtn = document.getElementById('clearBtn');
@@ -590,7 +563,6 @@ app.get('/home', (req, res) => {
         const copyBtn = document.getElementById('copyBtn');
         const downloadLink = document.getElementById('downloadLink');
         const toast = document.getElementById('toast');
-        const presetSelect = document.getElementById('presetSelect');
         const fileUpload = document.getElementById('fileUpload');
         const counter = document.getElementById('counter');
         const themeToggle = document.getElementById('themeToggle');
@@ -603,7 +575,7 @@ app.get('/home', (req, res) => {
             counter.textContent = \`Lines: \${lines} | Characters: \${chars}\`;
         }
         input.addEventListener('input', updateCounter);
-        updateCounter(); // initial
+        updateCounter();
 
         // File upload
         fileUpload.addEventListener('change', (e) => {
@@ -655,24 +627,21 @@ print(add(5, 7))\`;
                     errorDetail.style.display = 'none';
                     obfBtn.disabled = true;
 
-                    const preset = presetSelect.value;
                     try {
                         const response = await fetch('/api/obfuscate', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ code, recaptchaToken: token, preset })
+                            body: JSON.stringify({ code, recaptchaToken: token })
                         });
-                        const contentType = response.headers.get('Content-Type');
                         if (!response.ok) {
                             const err = await response.json();
-                            throw new Error(err.error, err.detail);
+                            throw err;
                         }
                         const obfuscated = await response.text();
                         resultCode.textContent = obfuscated;
                         resultSection.style.display = 'block';
                         errorDetail.style.display = 'none';
 
-                        // Download link setup
                         const randomStr = Math.random().toString(36).substr(2, 8);
                         const filename = \`Sttar_ObfuscatedCode_\${randomStr}.lua\`;
                         const blob = new Blob([obfuscated], { type: 'text/plain' });
@@ -680,18 +649,8 @@ print(add(5, 7))\`;
                         downloadLink.href = url;
                         downloadLink.download = filename;
                     } catch (err) {
-                        // Try to parse error detail
-                        let msg = err.message || 'Obfuscation failed';
-                        let detail = '';
-                        if (typeof err === 'object' && err.detail) detail = err.detail;
-                        if (err instanceof Error && err.message.includes('detail')) {
-                            // parse from JSON error
-                            try {
-                                const obj = JSON.parse(msg);
-                                msg = obj.error || msg;
-                                detail = obj.detail || '';
-                            } catch (e) { /* ignore */ }
-                        }
+                        let msg = err.error || 'Obfuscation failed';
+                        let detail = err.detail || '';
                         showToast('Error: ' + msg);
                         if (detail) {
                             errorDetail.textContent = 'Details: ' + detail;
@@ -715,7 +674,6 @@ print(add(5, 7))\`;
             }
         });
 
-        // Toast
         function showToast(msg) {
             toast.textContent = msg;
             toast.className = 'toast show';
@@ -725,11 +683,9 @@ print(add(5, 7))\`;
         // Dark/Light mode toggle
         themeToggle.addEventListener('click', () => {
             document.body.classList.toggle('light');
-            // Save preference
             localStorage.setItem('theme', document.body.classList.contains('light') ? 'light' : 'dark');
         });
 
-        // Load saved theme
         if (localStorage.getItem('theme') === 'light') {
             document.body.classList.add('light');
         }
@@ -738,10 +694,8 @@ print(add(5, 7))\`;
 </html>`);
 });
 
-// (Dashboard, Docs, Login, Logout, Health, Server start – same as before, see Part 3)
 // ================== DASHBOARD PAGE (RESPONSIVE) ==================
 app.get('/dashboard', (req, res) => {
-    // Same as before, just keep the existing dashboard HTML
     res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1042,7 +996,6 @@ app.get('/docs', (req, res) => {
 </html>`);
     }
 
-    // Authenticated docs page
     res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1157,13 +1110,12 @@ app.get('/docs', (req, res) => {
         <div class="card">
             <h2>Endpoint</h2>
             <p><span class="method">POST</span><span class="endpoint">/api/obfuscate</span></p>
-            <p style="margin-top: 15px; color: #94a3b8;">Send Lua code, preset, and recaptchaToken. Receive obfuscated code as plain text.</p>
+            <p style="margin-top: 15px; color: #94a3b8;">Send Lua code and recaptchaToken. Receive obfuscated code as plain text.</p>
         </div>
         <div class="card">
             <h2>Request Body (JSON)</h2>
             <div class="code-block">{
   "code": "print('Hello world')",
-  "preset": "Medium",
   "recaptchaToken": "xxxx"
 }</div>
         </div>
@@ -1173,7 +1125,7 @@ app.get('/docs', (req, res) => {
 [... obfuscated Lua code ...]</div>
         </div>
         <div class="note">
-            <strong>Note:</strong> Direct text response. Presets: Minify, Medium, High. reCAPTCHA v3 required.
+            <strong>Note:</strong> Direct text response. Obfuscation preset: Medium. reCAPTCHA v3 required.
         </div>
     </div>
 </body>
