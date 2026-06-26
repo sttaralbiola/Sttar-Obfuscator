@@ -51,6 +51,13 @@ async function verifyRecaptcha(token) {
 const PROMETHEUS_CLI = path.join(__dirname, 'Prometheus', 'cli.lua');
 const TEMP_DIR = os.tmpdir();
 
+// Preset mapping: frontend -> Prometheus preset name
+const PRESETS = {
+    'Minify': 'Minify',
+    'Medium': 'Medium',
+    'High': 'High'
+};
+
 // ================== HELPER: execFile as Promise ==================
 function execFileAsync(cmd, args) {
     return new Promise((resolve, reject) => {
@@ -129,10 +136,11 @@ app.get('/', (req, res) => {
 </html>`);
 });
 
-// ================== OBFS API (WITH RECAPTCHA) ==================
+// ================== OBFS API (WITH PRESET & ERROR DETAILS) ==================
 app.post('/api/obfuscate', async (req, res) => {
     const rawCode = req.body.code;
     const recaptchaToken = req.body.recaptchaToken;
+    const preset = PRESETS[req.body.preset] || 'Medium'; // default Medium
 
     if (!rawCode) {
         return res.status(400).json({ error: 'No code provided.' });
@@ -148,7 +156,7 @@ app.post('/api/obfuscate', async (req, res) => {
     const inputFile = path.join(TEMP_DIR, `temp_in_${id}.lua`);
     const outputFile = path.join(TEMP_DIR, `temp_out_${id}.lua`);
 
-    console.log(`[${id}] Received code, length: ${rawCode.length}`);
+    console.log(`[${id}] Received code, length: ${rawCode.length}, preset: ${preset}`);
 
     const cleanup = () => {
         try {
@@ -162,9 +170,9 @@ app.post('/api/obfuscate', async (req, res) => {
     try {
         fs.writeFileSync(inputFile, rawCode);
 
-        await execFileAsync('luajit', [
+        const { stderr } = await execFileAsync('luajit', [
             PROMETHEUS_CLI,
-            '--preset', 'Medium',
+            '--preset', preset,
             inputFile,
             '--out', outputFile
         ]);
@@ -185,12 +193,17 @@ app.post('/api/obfuscate', async (req, res) => {
 
     } catch (err) {
         console.error("Obfuscation error:", err.stderr || err.message);
+        // Isama ang error details (stderr) kung available
+        const detail = err.stderr ? err.stderr.toString().trim() : 'Unknown error';
         cleanup();
-        return res.status(500).json({ error: 'Obfuscation failed.' });
+        return res.status(500).json({
+            error: 'Obfuscation failed.',
+            detail: detail
+        });
     }
 });
 
-// ================== HOME PAGE (WITH RECAPTCHA SCRIPT) ==================
+// ================== HOME PAGE (WITH NEW FEATURES) ==================
 app.get('/home', (req, res) => {
     res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -202,9 +215,43 @@ app.get('/home', (req, res) => {
     <script src="https://www.google.com/recaptcha/api.js?render=${RECAPTCHA_SITE_KEY}"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --bg: #0a0a0a;
+            --card-bg: rgba(20,20,20,0.8);
+            --text: #e0e0e0;
+            --sub: #888;
+            --textarea-bg: #111;
+            --textarea-border: #2a2a2a;
+            --btn-bg: linear-gradient(135deg, #bb86fc, #7c4dff);
+            --btn-text: #fff;
+            --result-header: #bb86fc;
+            --action-bg: rgba(187,134,252,0.15);
+            --action-border: rgba(187,134,252,0.4);
+            --pre-bg: #111;
+            --toast-bg: #333;
+            --card-border: rgba(255,255,255,0.08);
+            --shadow: 0 30px 60px rgba(0,0,0,0.6);
+        }
+        body.light {
+            --bg: #f0f0f0;
+            --card-bg: rgba(255,255,255,0.9);
+            --text: #222;
+            --sub: #555;
+            --textarea-bg: #fff;
+            --textarea-border: #ccc;
+            --btn-bg: linear-gradient(135deg, #7c4dff, #bb86fc);
+            --btn-text: #fff;
+            --result-header: #7c4dff;
+            --action-bg: rgba(124,77,255,0.1);
+            --action-border: rgba(124,77,255,0.4);
+            --pre-bg: #f5f5f5;
+            --toast-bg: #555;
+            --card-border: rgba(0,0,0,0.1);
+            --shadow: 0 20px 40px rgba(0,0,0,0.2);
+        }
         body {
-            background-color: #0a0a0a;
-            color: #e0e0e0;
+            background-color: var(--bg);
+            color: var(--text);
             font-family: 'Inter', sans-serif;
             min-height: 100vh;
             display: flex;
@@ -214,6 +261,7 @@ app.get('/home', (req, res) => {
             padding: 20px;
             position: relative;
             overflow-x: hidden;
+            transition: background-color 0.3s, color 0.3s;
         }
         body::before {
             content: "";
@@ -223,32 +271,42 @@ app.get('/home', (req, res) => {
             background: radial-gradient(circle at 30% 20%, rgba(138, 43, 226, 0.08), transparent 50%),
                         radial-gradient(circle at 70% 80%, rgba(0, 255, 255, 0.05), transparent 50%);
             pointer-events: none;
+            z-index: 0;
         }
         .navbar {
             position: fixed;
             top: 20px;
             right: 20px;
             z-index: 10;
+            display: flex;
+            gap: 20px;
+            align-items: center;
         }
-        .navbar a {
-            color: #aaa;
+        .navbar a, .navbar button {
+            color: var(--sub);
             text-decoration: none;
-            margin-left: 25px;
             font-size: 14px;
             font-weight: 600;
             letter-spacing: 0.5px;
             transition: color 0.3s;
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 5px 10px;
         }
-        .navbar a:hover { color: #bb86fc; }
+        .navbar a:hover, .navbar button:hover { color: #bb86fc; }
         .main-container {
+            position: relative;
+            z-index: 1;
             width: 100%;
             max-width: 900px;
-            background: rgba(20, 20, 20, 0.8);
+            background: var(--card-bg);
             backdrop-filter: blur(25px);
-            border: 1px solid rgba(255,255,255,0.08);
+            border: 1px solid var(--card-border);
             border-radius: 24px;
             padding: clamp(20px, 5vw, 40px);
-            box-shadow: 0 30px 60px rgba(0,0,0,0.6);
+            box-shadow: var(--shadow);
+            transition: background 0.3s, border-color 0.3s;
         }
         h1 {
             font-size: clamp(2em, 6vw, 2.8em);
@@ -262,18 +320,49 @@ app.get('/home', (req, res) => {
         }
         .subtitle {
             text-align: center;
-            color: #888;
-            margin-bottom: 30px;
+            color: var(--sub);
+            margin-bottom: 25px;
             font-size: clamp(14px, 2vw, 16px);
+        }
+        .controls-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        .controls-row label {
+            color: var(--sub);
+            font-weight: 600;
+            font-size: 14px;
+        }
+        select, .file-upload-btn {
+            background: var(--textarea-bg);
+            border: 1px solid var(--textarea-border);
+            color: var(--text);
+            padding: 8px 14px;
+            border-radius: 10px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: border 0.3s;
+        }
+        select:focus, .file-upload-btn:focus {
+            outline: none;
+            border-color: #bb86fc;
+        }
+        .file-upload-btn {
+            display: inline-block;
+            background: var(--action-bg);
+            border-color: var(--action-border);
         }
         textarea {
             width: 100%;
             height: clamp(200px, 50vh, 280px);
-            background: #111;
-            border: 1px solid #2a2a2a;
+            background: var(--textarea-bg);
+            border: 1px solid var(--textarea-border);
             border-radius: 16px;
             padding: 20px;
-            color: #e0e0e0;
+            color: var(--text);
             font-family: 'Fira Code', monospace;
             font-size: 14px;
             resize: vertical;
@@ -284,28 +373,49 @@ app.get('/home', (req, res) => {
             border-color: #bb86fc;
             box-shadow: 0 0 0 3px rgba(187,134,252,0.3);
         }
-        .obfuscate-btn {
-            display: block;
-            margin: 25px auto 0;
-            background: linear-gradient(135deg, #bb86fc, #7c4dff);
-            border: none;
-            color: #fff;
-            font-size: clamp(16px, 2.5vw, 18px);
-            font-weight: 700;
-            padding: 14px 35px;
+        .counter {
+            text-align: right;
+            color: var(--sub);
+            font-size: 13px;
+            margin-top: 5px;
+        }
+        .button-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 15px;
+            justify-content: center;
+        }
+        .obfuscate-btn, .clear-btn, .sample-btn {
+            padding: 12px 25px;
             border-radius: 50px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
             cursor: pointer;
             transition: transform 0.2s, box-shadow 0.3s;
-            letter-spacing: 1px;
-            text-transform: uppercase;
-            width: 100%;
-            max-width: 300px;
+            font-size: 14px;
+            border: none;
+            color: #fff;
         }
-        .obfuscate-btn:hover {
+        .obfuscate-btn {
+            background: var(--btn-bg);
+            color: var(--btn-text);
+        }
+        .clear-btn {
+            background: rgba(255,255,255,0.1);
+            border: 1px solid var(--textarea-border);
+            color: var(--text);
+        }
+        .sample-btn {
+            background: rgba(3, 218, 198, 0.15);
+            border: 1px solid rgba(3, 218, 198, 0.5);
+            color: #03dac6;
+        }
+        .obfuscate-btn:hover, .clear-btn:hover, .sample-btn:hover {
             transform: translateY(-2px);
-            box-shadow: 0 15px 30px rgba(187,134,252,0.4);
+            box-shadow: 0 10px 20px rgba(187,134,252,0.3);
         }
-        .obfuscate-btn:active { transform: scale(0.97); }
         .loading {
             display: none;
             text-align: center;
@@ -339,7 +449,7 @@ app.get('/home', (req, res) => {
             gap: 10px;
         }
         .result-header h3 {
-            color: #bb86fc;
+            color: var(--result-header);
             font-weight: 600;
             font-size: 1.2em;
         }
@@ -349,9 +459,9 @@ app.get('/home', (req, res) => {
             flex-wrap: wrap;
         }
         .action-btns button, .action-btns a {
-            background: rgba(187,134,252,0.15);
-            border: 1px solid rgba(187,134,252,0.4);
-            color: #e0e0e0;
+            background: var(--action-bg);
+            border: 1px solid var(--action-border);
+            color: var(--text);
             padding: 8px 18px;
             border-radius: 30px;
             font-size: 14px;
@@ -366,8 +476,8 @@ app.get('/home', (req, res) => {
             border-color: #bb86fc;
         }
         pre {
-            background: #111;
-            border: 1px solid #2a2a2a;
+            background: var(--pre-bg);
+            border: 1px solid var(--textarea-border);
             border-radius: 16px;
             padding: 20px;
             font-family: 'Fira Code', monospace;
@@ -376,7 +486,7 @@ app.get('/home', (req, res) => {
             white-space: pre-wrap;
             word-break: break-word;
             max-height: 400px;
-            color: #ccc;
+            color: var(--text);
             line-height: 1.6;
         }
         .toast {
@@ -385,7 +495,7 @@ app.get('/home', (req, res) => {
             bottom: 30px;
             left: 50%;
             transform: translateX(-50%);
-            background: #333;
+            background: var(--toast-bg);
             color: white;
             padding: 12px 30px;
             border-radius: 30px;
@@ -407,27 +517,52 @@ app.get('/home', (req, res) => {
         }
         @media (max-width: 600px) {
             .navbar { top: 10px; right: 10px; }
-            .navbar a { margin-left: 15px; font-size: 13px; }
+            .navbar a, .navbar button { margin-left: 10px; font-size: 13px; }
             .main-container { padding: 20px 15px; }
             .action-btns { flex-direction: column; width: 100%; }
             .action-btns button, .action-btns a { text-align: center; }
             pre { font-size: 12px; }
+            .controls-row { flex-direction: column; align-items: flex-start; }
         }
     </style>
 </head>
 <body>
     <nav class="navbar">
+        <button id="themeToggle" title="Toggle dark/light mode">&#9681;</button>
         <a href="/dashboard">Dashboard</a>
     </nav>
     <div class="main-container">
         <h1>Sttar Obfuscator</h1>
         <p class="subtitle">Paste your Lua code below and get obfuscated output instantly.</p>
+
+        <!-- Controls: Preset & Upload -->
+        <div class="controls-row">
+            <label for="presetSelect">Preset:</label>
+            <select id="presetSelect">
+                <option value="Minify">Minify</option>
+                <option value="Medium" selected>Medium</option>
+                <option value="High">High</option>
+            </select>
+            <label for="fileUpload" class="file-upload-btn">
+                Upload .lua
+                <input type="file" id="fileUpload" accept=".lua" style="display:none">
+            </label>
+        </div>
+
         <textarea id="luaInput" placeholder="-- Write your Lua script here..."></textarea>
-        <button class="obfuscate-btn" id="obfBtn">Obfuscate</button>
+        <div class="counter" id="counter">Lines: 0 | Characters: 0</div>
+
+        <div class="button-row">
+            <button class="sample-btn" id="sampleBtn">Load Sample</button>
+            <button class="clear-btn" id="clearBtn">Clear</button>
+            <button class="obfuscate-btn" id="obfBtn">Obfuscate</button>
+        </div>
+
         <div class="loading" id="loading">
             <div class="loader"></div>
             <p>Obfuscating...</p>
         </div>
+
         <div class="result-section" id="resultSection">
             <div class="result-header">
                 <h3>Obfuscated Result</h3>
@@ -437,55 +572,131 @@ app.get('/home', (req, res) => {
                 </div>
             </div>
             <pre id="resultCode"></pre>
+            <div id="errorDetail" style="color:#f87171; margin-top:10px; display:none;"></div>
         </div>
     </div>
     <div class="toast" id="toast"></div>
 
     <script>
+        // DOM elements
         const input = document.getElementById('luaInput');
         const obfBtn = document.getElementById('obfBtn');
+        const clearBtn = document.getElementById('clearBtn');
+        const sampleBtn = document.getElementById('sampleBtn');
         const loading = document.getElementById('loading');
         const resultSection = document.getElementById('resultSection');
         const resultCode = document.getElementById('resultCode');
+        const errorDetail = document.getElementById('errorDetail');
         const copyBtn = document.getElementById('copyBtn');
         const downloadLink = document.getElementById('downloadLink');
         const toast = document.getElementById('toast');
+        const presetSelect = document.getElementById('presetSelect');
+        const fileUpload = document.getElementById('fileUpload');
+        const counter = document.getElementById('counter');
+        const themeToggle = document.getElementById('themeToggle');
 
-        obfBtn.addEventListener('click', async () => {
+        // Character & line counter
+        function updateCounter() {
+            const text = input.value;
+            const lines = text.split('\\n').length;
+            const chars = text.length;
+            counter.textContent = \`Lines: \${lines} | Characters: \${chars}\`;
+        }
+        input.addEventListener('input', updateCounter);
+        updateCounter(); // initial
+
+        // File upload
+        fileUpload.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                input.value = ev.target.result;
+                updateCounter();
+                showToast('File loaded.');
+            };
+            reader.readAsText(file);
+        });
+
+        // Sample code
+        sampleBtn.addEventListener('click', () => {
+            input.value = \`-- Sample Lua code
+print("Hello from Sttar Obfuscator!")
+for i = 1, 3 do
+    print("Iteration: " .. i)
+end
+local function add(a, b)
+    return a + b
+end
+print(add(5, 7))\`;
+            updateCounter();
+            showToast('Sample code loaded.');
+        });
+
+        // Clear
+        clearBtn.addEventListener('click', () => {
+            input.value = '';
+            resultSection.style.display = 'none';
+            errorDetail.style.display = 'none';
+            updateCounter();
+        });
+
+        // Obfuscate
+        obfBtn.addEventListener('click', () => {
             const code = input.value.trim();
             if (!code) {
                 showToast('Please enter some Lua code.');
                 return;
             }
-
             grecaptcha.ready(() => {
                 grecaptcha.execute('${RECAPTCHA_SITE_KEY}', { action: 'obfuscate' }).then(async (token) => {
                     loading.style.display = 'block';
                     resultSection.style.display = 'none';
+                    errorDetail.style.display = 'none';
                     obfBtn.disabled = true;
 
+                    const preset = presetSelect.value;
                     try {
                         const response = await fetch('/api/obfuscate', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ code, recaptchaToken: token })
+                            body: JSON.stringify({ code, recaptchaToken: token, preset })
                         });
+                        const contentType = response.headers.get('Content-Type');
                         if (!response.ok) {
                             const err = await response.json();
-                            throw new Error(err.error || 'Obfuscation failed');
+                            throw new Error(err.error, err.detail);
                         }
                         const obfuscated = await response.text();
                         resultCode.textContent = obfuscated;
                         resultSection.style.display = 'block';
+                        errorDetail.style.display = 'none';
 
+                        // Download link setup
                         const randomStr = Math.random().toString(36).substr(2, 8);
                         const filename = \`Sttar_ObfuscatedCode_\${randomStr}.lua\`;
                         const blob = new Blob([obfuscated], { type: 'text/plain' });
                         const url = URL.createObjectURL(blob);
                         downloadLink.href = url;
                         downloadLink.download = filename;
-                    } catch (error) {
-                        showToast('Error: ' + error.message);
+                    } catch (err) {
+                        // Try to parse error detail
+                        let msg = err.message || 'Obfuscation failed';
+                        let detail = '';
+                        if (typeof err === 'object' && err.detail) detail = err.detail;
+                        if (err instanceof Error && err.message.includes('detail')) {
+                            // parse from JSON error
+                            try {
+                                const obj = JSON.parse(msg);
+                                msg = obj.error || msg;
+                                detail = obj.detail || '';
+                            } catch (e) { /* ignore */ }
+                        }
+                        showToast('Error: ' + msg);
+                        if (detail) {
+                            errorDetail.textContent = 'Details: ' + detail;
+                            errorDetail.style.display = 'block';
+                        }
                     } finally {
                         loading.style.display = 'none';
                         obfBtn.disabled = false;
@@ -494,6 +705,7 @@ app.get('/home', (req, res) => {
             });
         });
 
+        // Copy
         copyBtn.addEventListener('click', async () => {
             try {
                 await navigator.clipboard.writeText(resultCode.textContent);
@@ -503,18 +715,33 @@ app.get('/home', (req, res) => {
             }
         });
 
+        // Toast
         function showToast(msg) {
             toast.textContent = msg;
             toast.className = 'toast show';
             setTimeout(() => { toast.className = toast.className.replace('show', ''); }, 2000);
+        }
+
+        // Dark/Light mode toggle
+        themeToggle.addEventListener('click', () => {
+            document.body.classList.toggle('light');
+            // Save preference
+            localStorage.setItem('theme', document.body.classList.contains('light') ? 'light' : 'dark');
+        });
+
+        // Load saved theme
+        if (localStorage.getItem('theme') === 'light') {
+            document.body.classList.add('light');
         }
     </script>
 </body>
 </html>`);
 });
 
-// ================== DASHBOARD PAGE (RESPONSIVE, NO EMOJI) ==================
+// (Dashboard, Docs, Login, Logout, Health, Server start – same as before, see Part 3)
+// ================== DASHBOARD PAGE (RESPONSIVE) ==================
 app.get('/dashboard', (req, res) => {
+    // Same as before, just keep the existing dashboard HTML
     res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -703,7 +930,6 @@ app.get('/dashboard', (req, res) => {
                 }
             });
         });
-
         const hamburger = document.getElementById('hamburger');
         const sidebar = document.getElementById('sidebar');
         const overlay = document.getElementById('overlay');
@@ -715,7 +941,6 @@ app.get('/dashboard', (req, res) => {
             sidebar.classList.remove('open');
             overlay.classList.remove('show');
         });
-
         document.querySelector('.sidebar a[href="/docs"]').addEventListener('click', () => {
             if (window.innerWidth <= 768) {
                 sidebar.classList.remove('open');
@@ -817,7 +1042,7 @@ app.get('/docs', (req, res) => {
 </html>`);
     }
 
-    // Authenticated docs
+    // Authenticated docs page
     res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -932,19 +1157,23 @@ app.get('/docs', (req, res) => {
         <div class="card">
             <h2>Endpoint</h2>
             <p><span class="method">POST</span><span class="endpoint">/api/obfuscate</span></p>
-            <p style="margin-top: 15px; color: #94a3b8;">Send Lua code, directly receive obfuscated code (plain text).</p>
+            <p style="margin-top: 15px; color: #94a3b8;">Send Lua code, preset, and recaptchaToken. Receive obfuscated code as plain text.</p>
         </div>
         <div class="card">
-            <h2>Request Body</h2>
-            <div class="code-block">{ "code": "print('Hello world')", "recaptchaToken": "..." }</div>
+            <h2>Request Body (JSON)</h2>
+            <div class="code-block">{
+  "code": "print('Hello world')",
+  "preset": "Medium",
+  "recaptchaToken": "xxxx"
+}</div>
         </div>
         <div class="card">
-            <h2>Response (Obfuscated Code)</h2>
-            <div class="code-block">-- Obfuscated by Sttar Obfuscator https://sttar-obfuscators.onrender.com/home
+            <h2>Success Response (200)</h2>
+            <div class="code-block">-- Obfuscated by Sttar Obfuscator ...
 [... obfuscated Lua code ...]</div>
         </div>
         <div class="note">
-            <strong>Note:</strong> Direct text response, no external storage. Medium preset. reCAPTCHA v3 required.
+            <strong>Note:</strong> Direct text response. Presets: Minify, Medium, High. reCAPTCHA v3 required.
         </div>
     </div>
 </body>
