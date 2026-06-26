@@ -23,9 +23,46 @@ app.use(session({
 
 const PASSWORD = "sttaralbiola";
 
+// ================== RECAPTCHA CONFIG (HARDCODED) ==================
+const RECAPTCHA_SITE_KEY = "6Lc5YjUtAAAAAGifwAnffNcvsfq9HVcd8n7bxSRH";
+const RECAPTCHA_SECRET = "6Lc5YjUtAAAAAN4a0SvRFpgxTikuey_pppKOXm_2";
+const RECAPTCHA_VERIFY_URL = "https://www.google.com/recaptcha/api/siteverify";
+const RECAPTCHA_SCORE_THRESHOLD = 0.5;
+
+async function verifyRecaptcha(token) {
+    if (!token) return false;
+    try {
+        const params = new URLSearchParams();
+        params.append('secret', RECAPTCHA_SECRET);
+        params.append('response', token);
+        const response = await fetch(RECAPTCHA_VERIFY_URL, {
+            method: 'POST',
+            body: params
+        });
+        const data = await response.json();
+        return data.success && data.score >= RECAPTCHA_SCORE_THRESHOLD;
+    } catch (err) {
+        console.error('reCAPTCHA verification error:', err);
+        return false;
+    }
+}
+
 // ================== PATH TO PROMETHEUS CLI ==================
 const PROMETHEUS_CLI = path.join(__dirname, 'Prometheus', 'cli.lua');
 const TEMP_DIR = os.tmpdir();
+
+// ================== HELPER: execFile as Promise ==================
+function execFileAsync(cmd, args) {
+    return new Promise((resolve, reject) => {
+        execFile(cmd, args, (error, stdout, stderr) => {
+            if (error) {
+                reject({ error, stdout, stderr });
+            } else {
+                resolve({ stdout, stderr });
+            }
+        });
+    });
+}
 
 // ================== ROOT ROUTE ==================
 app.get('/', (req, res) => {
@@ -86,18 +123,25 @@ app.get('/', (req, res) => {
     <div class="card">
         <h1>Sttar Obfuscator</h1>
         <p>Invalid route. If you want to use our obfuscator, please go to:</p>
-        <a href="/home">https://obfuscator-api-bzc1.onrender.com/home</a>
+        <a href="/home">https://sttar-obfuscators.onrender.com/home</a>
     </div>
 </body>
 </html>`);
 });
 
-// ================== OBFS API (DIRECT CODE RESPONSE) ==================
-app.post('/api/obfuscate', (req, res) => {
+// ================== OBFS API (WITH RECAPTCHA) ==================
+app.post('/api/obfuscate', async (req, res) => {
     const rawCode = req.body.code;
+    const recaptchaToken = req.body.recaptchaToken;
 
     if (!rawCode) {
-        return res.status(400).json({ error: 'Walang code na nilagay!' });
+        return res.status(400).json({ error: 'No code provided.' });
+    }
+
+    // Verify reCAPTCHA
+    const isHuman = await verifyRecaptcha(recaptchaToken);
+    if (!isHuman) {
+        return res.status(403).json({ error: 'reCAPTCHA verification failed. Please try again.' });
     }
 
     const id = randomUUID();
@@ -118,55 +162,35 @@ app.post('/api/obfuscate', (req, res) => {
     try {
         fs.writeFileSync(inputFile, rawCode);
 
-        execFile(
-            'luajit',
-            [
-                PROMETHEUS_CLI,
-                '--preset', 'Medium',
-                inputFile,
-                '--out', outputFile
-            ],
-            (error, stdout, stderr) => {
-                console.log(`[${id}] CLI stdout:`, stdout);
-                if (error) {
-                    console.error(`[${id}] Engine error:`, stderr || error.message);
-                    cleanup();
-                    return res.status(500).json({ error: 'Obfuscation failed.' });
-                }
+        await execFileAsync('luajit', [
+            PROMETHEUS_CLI,
+            '--preset', 'Medium',
+            inputFile,
+            '--out', outputFile
+        ]);
 
-                try {
-                    if (!fs.existsSync(outputFile)) {
-                        cleanup();
-                        return res.status(500).json({ error: 'No output generated.' });
-                    }
+        if (!fs.existsSync(outputFile)) {
+            cleanup();
+            return res.status(500).json({ error: 'No output generated.' });
+        }
 
-                    const obfuscatedCode = fs.readFileSync(outputFile, 'utf8');
+        const obfuscatedCode = fs.readFileSync(outputFile, 'utf8');
+        const header = `-- Obfuscated by Sttar Obfuscator https://sttar-obfuscators.onrender.com/home`;
+        const finalCode = header + '\n' + obfuscatedCode;
 
-                    // No emoji, simple header
-                    const header = `-- Obfuscated by Sttar Obfuscator https://obfuscator-api-bzc1.onrender.com/home`;
-                    const finalCode = header + '\n' + obfuscatedCode;
+        cleanup();
 
-                    cleanup();
-
-                    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-                    return res.send(finalCode);
-
-                } catch (err) {
-                    console.error("Error:", err.message);
-                    cleanup();
-                    return res.status(500).json({ error: 'Failed to process.' });
-                }
-            }
-        );
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        return res.send(finalCode);
 
     } catch (err) {
-        console.error(err.message);
+        console.error("Obfuscation error:", err.stderr || err.message);
         cleanup();
-        return res.status(500).json({ error: 'Server error.' });
+        return res.status(500).json({ error: 'Obfuscation failed.' });
     }
 });
 
-// ================== HOME PAGE – RESPONSIVE, NO EMOJI ==================
+// ================== HOME PAGE (WITH RECAPTCHA SCRIPT) ==================
 app.get('/home', (req, res) => {
     res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -175,6 +199,7 @@ app.get('/home', (req, res) => {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sttar Obfuscator</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <script src="https://www.google.com/recaptcha/api.js?render=${RECAPTCHA_SITE_KEY}"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -224,7 +249,6 @@ app.get('/home', (req, res) => {
             border-radius: 24px;
             padding: clamp(20px, 5vw, 40px);
             box-shadow: 0 30px 60px rgba(0,0,0,0.6);
-            transition: transform 0.3s;
         }
         h1 {
             font-size: clamp(2em, 6vw, 2.8em);
@@ -274,8 +298,6 @@ app.get('/home', (req, res) => {
             transition: transform 0.2s, box-shadow 0.3s;
             letter-spacing: 1px;
             text-transform: uppercase;
-            position: relative;
-            overflow: hidden;
             width: 100%;
             max-width: 300px;
         }
@@ -432,39 +454,44 @@ app.get('/home', (req, res) => {
         obfBtn.addEventListener('click', async () => {
             const code = input.value.trim();
             if (!code) {
-                showToast('Warning: Please enter some Lua code.');
+                showToast('Please enter some Lua code.');
                 return;
             }
-            loading.style.display = 'block';
-            resultSection.style.display = 'none';
-            obfBtn.disabled = true;
 
-            try {
-                const response = await fetch('/api/obfuscate', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ code })
+            grecaptcha.ready(() => {
+                grecaptcha.execute('${RECAPTCHA_SITE_KEY}', { action: 'obfuscate' }).then(async (token) => {
+                    loading.style.display = 'block';
+                    resultSection.style.display = 'none';
+                    obfBtn.disabled = true;
+
+                    try {
+                        const response = await fetch('/api/obfuscate', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ code, recaptchaToken: token })
+                        });
+                        if (!response.ok) {
+                            const err = await response.json();
+                            throw new Error(err.error || 'Obfuscation failed');
+                        }
+                        const obfuscated = await response.text();
+                        resultCode.textContent = obfuscated;
+                        resultSection.style.display = 'block';
+
+                        const randomStr = Math.random().toString(36).substr(2, 8);
+                        const filename = \`Sttar_ObfuscatedCode_\${randomStr}.lua\`;
+                        const blob = new Blob([obfuscated], { type: 'text/plain' });
+                        const url = URL.createObjectURL(blob);
+                        downloadLink.href = url;
+                        downloadLink.download = filename;
+                    } catch (error) {
+                        showToast('Error: ' + error.message);
+                    } finally {
+                        loading.style.display = 'none';
+                        obfBtn.disabled = false;
+                    }
                 });
-                if (!response.ok) {
-                    const err = await response.json();
-                    throw new Error(err.error || 'Obfuscation failed');
-                }
-                const obfuscated = await response.text();
-                resultCode.textContent = obfuscated;
-                resultSection.style.display = 'block';
-                // Setup download
-                const randomStr = Math.random().toString(36).substr(2, 8);
-                const filename = \`Sttar_ObfuscatedCode_\${randomStr}.lua\`;
-                const blob = new Blob([obfuscated], { type: 'text/plain' });
-                const url = URL.createObjectURL(blob);
-                downloadLink.href = url;
-                downloadLink.download = filename;
-            } catch (error) {
-                showToast('Error: ' + error.message);
-            } finally {
-                loading.style.display = 'none';
-                obfBtn.disabled = false;
-            }
+            });
         });
 
         copyBtn.addEventListener('click', async () => {
@@ -486,7 +513,7 @@ app.get('/home', (req, res) => {
 </html>`);
 });
 
-// ================== DASHBOARD PAGE – RESPONSIVE, NO EMOJI ==================
+// ================== DASHBOARD PAGE (RESPONSIVE, NO EMOJI) ==================
 app.get('/dashboard', (req, res) => {
     res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -661,7 +688,6 @@ app.get('/dashboard', (req, res) => {
         </div>
     </div>
     <script>
-        // Tab switching
         const btns = document.querySelectorAll('.tab-btn');
         const panels = document.querySelectorAll('.content-panel');
         btns.forEach(btn => {
@@ -678,7 +704,6 @@ app.get('/dashboard', (req, res) => {
             });
         });
 
-        // Hamburger menu
         const hamburger = document.getElementById('hamburger');
         const sidebar = document.getElementById('sidebar');
         const overlay = document.getElementById('overlay');
@@ -691,7 +716,6 @@ app.get('/dashboard', (req, res) => {
             overlay.classList.remove('show');
         });
 
-        // Close sidebar when link to /docs is clicked
         document.querySelector('.sidebar a[href="/docs"]').addEventListener('click', () => {
             if (window.innerWidth <= 768) {
                 sidebar.classList.remove('open');
@@ -703,7 +727,7 @@ app.get('/dashboard', (req, res) => {
 </html>`);
 });
 
-// ================== API DOCS (Password Protected) – NO EMOJI ==================
+// ================== API DOCS (Password Protected) ==================
 app.get('/docs', (req, res) => {
     if (!req.session.authenticated) {
         return res.send(`<!DOCTYPE html>
@@ -793,7 +817,7 @@ app.get('/docs', (req, res) => {
 </html>`);
     }
 
-    // Authenticated docs page
+    // Authenticated docs
     res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -912,7 +936,7 @@ app.get('/docs', (req, res) => {
         </div>
         <div class="card">
             <h2>Request Body</h2>
-            <div class="code-block">{ "code": "print('Hello world')" }</div>
+            <div class="code-block">{ "code": "print('Hello world')", "recaptchaToken": "..." }</div>
         </div>
         <div class="card">
             <h2>Response (Obfuscated Code)</h2>
@@ -920,7 +944,7 @@ app.get('/docs', (req, res) => {
 [... obfuscated Lua code ...]</div>
         </div>
         <div class="note">
-            <strong>Note:</strong> Direct text response, no external storage. Medium preset.
+            <strong>Note:</strong> Direct text response, no external storage. Medium preset. reCAPTCHA v3 required.
         </div>
     </div>
 </body>
