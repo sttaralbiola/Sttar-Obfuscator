@@ -16,6 +16,10 @@ app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.disable('x-powered-by');
 
+// Render (and most hosts) sit behind a reverse proxy. This makes req.ip resolve
+// the real client IP from X-Forwarded-For instead of the proxy's internal IP.
+app.set('trust proxy', true);
+
 app.use(session({
     secret: 'supersecretkey123',
     resave: false,
@@ -51,6 +55,54 @@ async function verifyRecaptcha(token) {
         console.error('reCAPTCHA verification error:', err);
         return false;
     }
+}
+
+// ================== RATE LIMITING & FREE API KEYS ==================
+// In-memory only — resets if the server restarts. Fine for a single small app.
+
+// IPs in this list bypass rate limiting entirely. Add your own IP(s) here.
+// Note: 192.168.x.x is a private/local address — it will only match if the
+// server actually sees that as req.ip (e.g. local network/VPN). On a public
+// Render deployment, find your real public IP and add it here instead.
+const IP_WHITELIST = ['192.168.8.36'];
+
+const RATE_LIMIT_WINDOW_MS = 60 * 1000;   // 1 minute window
+const RATE_LIMIT_MAX_ANON = 5;            // requests/min, no API key
+const RATE_LIMIT_MAX_KEYED = 30;          // requests/min, with a valid free API key
+
+const rateLimitStore = new Map(); // ip -> { count, windowStart }
+const apiKeys = new Set();        // generated free API keys
+
+function normalizeIp(ip) {
+    if (!ip) return ip;
+    return ip.replace(/^::ffff:/, '');
+}
+
+function getClientIp(req) {
+    return normalizeIp(req.ip);
+}
+
+function isWhitelisted(ip) {
+    return IP_WHITELIST.includes(ip);
+}
+
+function checkRateLimit(ip, hasValidKey) {
+    const now = Date.now();
+    const max = hasValidKey ? RATE_LIMIT_MAX_KEYED : RATE_LIMIT_MAX_ANON;
+    const entry = rateLimitStore.get(ip);
+
+    if (!entry || now - entry.windowStart > RATE_LIMIT_WINDOW_MS) {
+        rateLimitStore.set(ip, { count: 1, windowStart: now });
+        return { allowed: true };
+    }
+
+    if (entry.count >= max) {
+        const retryAfterMs = RATE_LIMIT_WINDOW_MS - (now - entry.windowStart);
+        return { allowed: false, retryAfterSeconds: Math.ceil(retryAfterMs / 1000) };
+    }
+
+    entry.count += 1;
+    return { allowed: true };
 }
 
 // ================== PROMETHEUS CLI & HELPER ==================
@@ -195,6 +247,21 @@ app.post('/api/obfuscate', async (req, res) => {
     const rawCode = req.body.code;
     const recaptchaToken = req.body.recaptchaToken;
 
+    const clientIp = getClientIp(req);
+    const apiKey = req.headers['x-api-key'];
+    const hasValidKey = !!(apiKey && apiKeys.has(apiKey));
+
+    if (!isWhitelisted(clientIp)) {
+        const rl = checkRateLimit(clientIp, hasValidKey);
+        if (!rl.allowed) {
+            res.setHeader('Retry-After', rl.retryAfterSeconds);
+            return res.status(429).json({
+                error: 'Too many requests. Slow down a bit.',
+                retryAfterSeconds: rl.retryAfterSeconds
+            });
+        }
+    }
+
     let preset = req.body.preset || 'Medium';
     if (!ALLOWED_PRESETS.includes(preset)) preset = 'Medium';
 
@@ -248,6 +315,21 @@ app.post('/api/obfuscate', async (req, res) => {
     }
 });
 
+// ================== FREE API KEY ==================
+app.post('/api/generate-key', (req, res) => {
+    const clientIp = getClientIp(req);
+    if (!isWhitelisted(clientIp)) {
+        const rl = checkRateLimit('keygen:' + clientIp, false);
+        if (!rl.allowed) {
+            res.setHeader('Retry-After', rl.retryAfterSeconds);
+            return res.status(429).json({ error: 'Too many key requests. Try again later.' });
+        }
+    }
+    const key = 'sttar_' + randomUUID().replace(/-/g, '');
+    apiKeys.add(key);
+    return res.json({ apiKey: key, rateLimitPerMinute: RATE_LIMIT_MAX_KEYED });
+});
+
 // ================== SHARE API ==================
 app.post('/api/share', async (req, res) => {
     const obfuscatedCode = req.body.code;
@@ -285,6 +367,9 @@ app.get('/home', (req, res) => {
     <title>Sttar — Lua Obfuscator</title>
     ${FONT_LINK}
     <script src="https://www.google.com/recaptcha/api.js" async defer></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/lua/lua.min.js"></script>
     <style>
         ${BASE_STYLE}
         body { display: flex; flex-direction: column; align-items: center; padding: 0 16px 60px; }
@@ -295,11 +380,14 @@ app.get('/home', (req, res) => {
         }
         .logo { font-weight: 800; font-size: 14px; letter-spacing: -0.2px; }
         .logo span { color: var(--text-dim); font-weight: 500; }
-        .nav a {
+        .nav-actions { display: flex; gap: 8px; align-items: center; position: relative; }
+        .icon-btn {
             font-size: 13px; color: var(--text-dim); text-decoration: none;
-            border: 1px solid var(--border); padding: 7px 14px; border-radius: 7px;
+            border: 1px solid var(--border); padding: 7px 12px; border-radius: 7px;
+            background: transparent; font-family: inherit; cursor: pointer;
         }
-        .nav a:hover { color: var(--text); border-color: var(--border-hover); }
+        .icon-btn:hover { color: var(--text); border-color: var(--border-hover); }
+
         .hero { width: 100%; max-width: 760px; margin: 18px 0 28px; }
         .hero h1 { font-size: clamp(1.6em, 4.5vw, 2.1em); font-weight: 700; letter-spacing: -0.5px; margin-bottom: 8px; }
         .hero p { color: var(--text-dim); font-size: 14.5px; }
@@ -316,21 +404,28 @@ app.get('/home', (req, res) => {
         }
         .upload-link { color: var(--text-dim); font-weight: 500; text-transform: none; letter-spacing: 0; cursor: pointer; font-size: 12.5px; }
         .upload-link:hover { color: var(--text); }
-        textarea {
-            width: 100%;
-            height: clamp(190px, 42vh, 260px);
-            background: var(--panel-2);
+
+        .editor-wrap {
             border: 1px solid var(--border);
             border-radius: 10px;
-            padding: 16px;
-            color: var(--text);
-            font-family: 'Menlo', 'Consolas', monospace;
-            font-size: 13px;
-            resize: vertical;
+            overflow: hidden;
         }
-        textarea::placeholder { color: var(--text-dimmer); }
-        textarea:focus { outline: none; border-color: var(--border-hover); }
-        .meta { display: flex; justify-content: space-between; color: var(--text-dimmer); font-size: 11.5px; margin-top: 8px; }
+        .editor-wrap:focus-within { border-color: var(--border-hover); }
+        .CodeMirror { height: auto; min-height: 190px; max-height: 50vh; font-family: 'Menlo','Consolas',monospace; font-size: 13px; }
+        .cm-s-sttar.CodeMirror { background: var(--panel-2); color: var(--text); }
+        .cm-s-sttar .CodeMirror-gutters { background: var(--panel-2); border-right: 1px solid var(--border); }
+        .cm-s-sttar .CodeMirror-linenumber { color: var(--text-dimmer); }
+        .cm-s-sttar .cm-keyword { color: var(--accent-user, #5e9eff); font-weight: 600; }
+        .cm-s-sttar .cm-string { color: #2dd4bf; }
+        .cm-s-sttar .cm-comment { color: var(--text-dimmer); font-style: italic; }
+        .cm-s-sttar .cm-number { color: #ffb000; }
+        .cm-s-sttar .cm-variable, .cm-s-sttar .cm-def { color: var(--text); }
+        .cm-s-sttar .cm-operator { color: var(--text-dim); }
+        .cm-s-sttar .CodeMirror-cursor { border-left: 1px solid var(--text); }
+        .cm-s-sttar div.CodeMirror-selected { background: rgba(255,255,255,0.1); }
+        .CodeMirror-placeholder { color: var(--text-dimmer) !important; }
+
+        .meta { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 6px; color: var(--text-dimmer); font-size: 11.5px; margin-top: 8px; }
 
         .controls { margin-top: 22px; display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
         @media (max-width: 560px) { .controls { grid-template-columns: 1fr; } }
@@ -344,7 +439,7 @@ app.get('/home', (req, res) => {
             font-family: inherit; font-size: 12.5px; font-weight: 600;
             padding: 8px 6px; border-radius: 6px; cursor: pointer;
         }
-        .pill.active { background: var(--white); color: #000; }
+        .pill.active { background: var(--accent-user, #ffffff); color: var(--accent-text, #000000); }
         .pill:not(.active):hover { color: var(--text); }
         .hint { font-size: 11.5px; color: var(--text-dimmer); margin-top: 7px; }
 
@@ -364,14 +459,14 @@ app.get('/home', (req, res) => {
         button:hover { border-color: var(--border-hover); color: var(--text); }
         #runBtn {
             flex: 1;
-            background: var(--white);
-            color: #000;
-            border-color: var(--white);
+            background: var(--accent-user, #ffffff);
+            color: var(--accent-text, #000000);
+            border-color: var(--accent-user, #ffffff);
         }
-        #runBtn:hover { background: #d9d9d9; }
-        #runBtn:disabled { opacity: 0.35; cursor: not-allowed; background: var(--text-dim); border-color: var(--text-dim); }
-        #shareBtn { border-color: var(--accent); color: var(--accent); display: none; }
-        #shareBtn:hover { background: rgba(94,158,255,0.1); }
+        #runBtn:hover { filter: brightness(0.88); }
+        #runBtn:disabled { opacity: 0.35; cursor: not-allowed; filter: none; background: var(--text-dim); border-color: var(--text-dim); color: #000; }
+        #shareBtn { border-color: var(--accent-user, #5e9eff); color: var(--accent-user, #5e9eff); display: none; }
+        #shareBtn:hover { background: rgba(255,255,255,0.06); }
 
         .loading { display: none; align-items: center; gap: 10px; margin-top: 20px; color: var(--text-dim); font-size: 13px; }
         .spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--border); border-top-color: var(--text); animation: spin 0.7s linear infinite; }
@@ -414,16 +509,81 @@ app.get('/home', (req, res) => {
             0% { opacity: 0; bottom: 16px; } 10% { opacity: 1; bottom: 26px; }
             90% { opacity: 1; bottom: 26px; } 100% { opacity: 0; bottom: 16px; }
         }
+
+        /* ---------- accent popover ---------- */
+        .accent-pop {
+            position: absolute; top: calc(100% + 8px); right: 36px;
+            background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+            padding: 14px; width: 200px; display: none; z-index: 50;
+            box-shadow: 0 12px 30px rgba(0,0,0,0.5);
+        }
+        .accent-pop.open { display: block; }
+        .accent-pop .swrow { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+        .swatch { width: 24px; height: 24px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; }
+        .swatch.selected { border-color: var(--text); }
+        .accent-pop input[type="color"] {
+            width: 100%; height: 32px; border: 1px solid var(--border); border-radius: 6px;
+            background: var(--panel-2); cursor: pointer; padding: 2px;
+        }
+
+        /* ---------- drawer ---------- */
+        .overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 30; }
+        .overlay.show { display: block; }
+        .drawer {
+            position: fixed; top: 0; right: 0; bottom: 0; width: min(340px, 86vw);
+            background: var(--panel); border-left: 1px solid var(--border);
+            z-index: 31; transform: translateX(100%); transition: transform 0.25s ease;
+            display: flex; flex-direction: column;
+        }
+        .drawer.open { transform: translateX(0); }
+        .drawer-head { display: flex; justify-content: space-between; align-items: center; padding: 18px; border-bottom: 1px solid var(--border); }
+        .drawer-head .logo { font-size: 13px; }
+        .drawer-close { background: none; border: 1px solid var(--border); color: var(--text-dim); border-radius: 6px; width: 30px; height: 30px; cursor: pointer; }
+        .drawer-tabs { display: flex; gap: 4px; padding: 12px 14px 0; flex-wrap: wrap; }
+        .dtab {
+            background: none; border: 1px solid var(--border); color: var(--text-dim);
+            font-family: inherit; font-size: 11.5px; font-weight: 600; padding: 6px 10px;
+            border-radius: 20px; cursor: pointer;
+        }
+        .dtab.active { background: var(--accent-user, #ffffff); color: var(--accent-text, #000); border-color: var(--accent-user, #ffffff); }
+        .drawer-body { padding: 16px 18px; overflow-y: auto; flex: 1; }
+        .dpanel { display: none; }
+        .dpanel.active { display: block; }
+        .dpanel h3 { font-size: 14px; font-weight: 700; margin-bottom: 10px; }
+        .dpanel p { color: var(--text-dim); font-size: 13px; line-height: 1.7; margin-bottom: 10px; }
+        .dpanel a { color: var(--accent-user, #5e9eff); font-weight: 600; text-decoration: none; }
+        .dpanel a:hover { text-decoration: underline; }
+        .key-box {
+            background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+            padding: 12px; font-size: 11.5px; word-break: break-all; font-family: 'Menlo','Consolas',monospace;
+            color: var(--text); margin: 10px 0;
+        }
+        .hist-item {
+            border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px;
+            cursor: pointer; font-size: 12px; color: var(--text-dim);
+        }
+        .hist-item:hover { border-color: var(--border-hover); color: var(--text); }
+        .hist-item .hi-top { display: flex; justify-content: space-between; font-weight: 600; color: var(--text); margin-bottom: 3px; }
+        .empty-state { color: var(--text-dimmer); font-size: 12.5px; }
+
         @media (max-width: 560px) {
             .actbtns { flex-direction: column; width: 100%; }
             .actbtns button, .actbtns a.btn { text-align: center; }
+            .accent-pop { right: 8px; }
         }
     </style>
 </head>
 <body>
     <div class="nav">
         <div class="logo">Sttar<span> / obfuscator</span></div>
-        <a href="/dashboard">Dashboard</a>
+        <div class="nav-actions">
+            <button class="icon-btn" id="accentBtn" type="button">Accent</button>
+            <div class="accent-pop" id="accentPop">
+                <div class="swrow" id="swatchRow"></div>
+                <input type="color" id="customColor" value="#ffffff">
+            </div>
+            <button class="icon-btn" id="menuBtn" type="button">Menu</button>
+        </div>
     </div>
     <div class="hero">
         <h1>Obfuscate your Lua scripts</h1>
@@ -435,8 +595,13 @@ app.get('/home', (req, res) => {
             <span class="upload-link" id="uploadLink">Upload .lua file</span>
             <input type="file" id="fileUpload" accept=".lua" style="display:none">
         </div>
-        <textarea id="luaInput" placeholder="-- paste your Lua script here"></textarea>
-        <div class="meta"><span id="counter">0 lines · 0 chars</span></div>
+        <div class="editor-wrap">
+            <textarea id="luaInput" style="display:none;"></textarea>
+        </div>
+        <div class="meta">
+            <span id="counter">0 lines · 0 chars</span>
+            <span id="estimate">Est. output: ~0 chars</span>
+        </div>
 
         <div class="controls">
             <div>
@@ -484,6 +649,55 @@ app.get('/home', (req, res) => {
         </div>
     </div>
     <div class="toast" id="toast"></div>
+
+    <div class="overlay" id="overlay"></div>
+    <div class="drawer" id="drawer">
+        <div class="drawer-head">
+            <div class="logo">Sttar<span> / menu</span></div>
+            <button class="drawer-close" id="drawerClose">✕</button>
+        </div>
+        <div class="drawer-tabs">
+            <button class="dtab active" data-dtab="about">About</button>
+            <button class="dtab" data-dtab="privacy">Privacy</button>
+            <button class="dtab" data-dtab="usage">Usage</button>
+            <button class="dtab" data-dtab="apikey">API Key</button>
+            <button class="dtab" data-dtab="history">History</button>
+        </div>
+        <div class="drawer-body">
+            <div id="d-about" class="dpanel active">
+                <h3>About Sttar</h3>
+                <p>Sttar is a Lua obfuscation tool built for Roblox scripters. Paste a script, pick a preset, and get back a transformed version that's far harder to reverse-engineer while staying fully functional.</p>
+                <p>Runs on the Prometheus engine with extra passes layered on top. Supports Lua 5.1 and LuaU output.</p>
+                <p><a href="/docs">API reference 🔒</a></p>
+            </div>
+            <div id="d-privacy" class="dpanel">
+                <h3>Privacy</h3>
+                <p>Code you submit is never stored or logged server-side. Processing happens in memory; temp files are deleted right after each job.</p>
+                <p>Your preset, version, and the last 5 results you generate are saved only in your own browser (localStorage) for the History tab below — nothing leaves your device for that.</p>
+                <p>Questions: <a href="https://sttar-obfuscator.netlify.app" target="_blank">sttar-obfuscator.netlify.app</a></p>
+            </div>
+            <div id="d-usage" class="dpanel">
+                <h3>How to use</h3>
+                <p>1. Paste or upload a .lua file.</p>
+                <p>2. Choose a preset and Lua version.</p>
+                <p>3. Complete the human check, then click Obfuscate.</p>
+                <p>4. Copy, download, or share a loadstring link (Lua 5.1 only).</p>
+                <p>5. Pick an accent color up top if you want — it's saved automatically.</p>
+            </div>
+            <div id="d-apikey" class="dpanel">
+                <h3>Free API key</h3>
+                <p>Generate a personal key to raise your rate limit on /api/obfuscate from 5 to 30 requests/min. Free, no signup.</p>
+                <div id="keyDisplay" class="key-box" style="display:none;"></div>
+                <button id="genKeyBtn" type="button">Generate key</button>
+                <button id="copyKeyBtn" type="button" style="display:none;">Copy key</button>
+            </div>
+            <div id="d-history" class="dpanel">
+                <h3>Recent obfuscations</h3>
+                <div id="historyList"></div>
+            </div>
+        </div>
+    </div>
+
     <script>
         const input = document.getElementById('luaInput');
         const runBtn = document.getElementById('runBtn');
@@ -500,6 +714,7 @@ app.get('/home', (req, res) => {
         const fileUpload = document.getElementById('fileUpload');
         const uploadLink = document.getElementById('uploadLink');
         const counter = document.getElementById('counter');
+        const estimate = document.getElementById('estimate');
         const presetGroup = document.getElementById('presetGroup');
         const luaVersionGroup = document.getElementById('luaVersionGroup');
         const luauHint = document.getElementById('luauHint');
@@ -508,14 +723,26 @@ app.get('/home', (req, res) => {
         let selectedPreset = 'Medium';
         let selectedLuaVersion = 'lua51';
 
-        function updateCounter() {
-            const text = input.value;
-            const lines = text.split('\\n').length;
+        // ---------- CodeMirror editor ----------
+        const cm = CodeMirror.fromTextArea(input, {
+            mode: 'lua',
+            theme: 'sttar',
+            lineNumbers: true,
+            tabSize: 4,
+            placeholder: '-- paste your Lua script here'
+        });
+
+        const SIZE_MULTIPLIER = { Minify: 1.05, Weak: 1.6, Medium: 2.4, Strong: 3.5 };
+        function updateCounterAndEstimate() {
+            const text = cm.getValue();
+            const lines = text.length ? text.split('\\n').length : 0;
             const chars = text.length;
             counter.textContent = lines + ' lines · ' + chars + ' chars';
+            const est = Math.round(chars * (SIZE_MULTIPLIER[selectedPreset] || 1));
+            estimate.textContent = 'Est. output: ~' + est.toLocaleString() + ' chars';
         }
-        input.addEventListener('input', updateCounter);
-        updateCounter();
+        cm.on('change', updateCounterAndEstimate);
+        updateCounterAndEstimate();
 
         function wireGroup(group, onSelect) {
             group.querySelectorAll('.pill').forEach(p => {
@@ -527,7 +754,7 @@ app.get('/home', (req, res) => {
             });
         }
 
-        wireGroup(presetGroup, (val) => { selectedPreset = val; });
+        wireGroup(presetGroup, (val) => { selectedPreset = val; updateCounterAndEstimate(); });
         wireGroup(luaVersionGroup, (val) => {
             selectedLuaVersion = val;
             const isLuau = val === 'luau';
@@ -545,33 +772,34 @@ app.get('/home', (req, res) => {
             if (!file) return;
             const reader = new FileReader();
             reader.onload = (ev) => {
-                input.value = ev.target.result;
-                updateCounter();
+                cm.setValue(ev.target.result);
                 showToast('File loaded.');
             };
             reader.readAsText(file);
         });
 
         sampleBtn.addEventListener('click', () => {
-            input.value = '-- sample script\\nprint("hello from sttar")\\nfor i = 1, 3 do\\n    print("iteration " .. i)\\nend\\nlocal function add(a, b)\\n    return a + b\\nend\\nprint(add(5, 7))';
-            updateCounter();
+            cm.setValue('-- sample script\\nprint("hello from sttar")\\nfor i = 1, 3 do\\n    print("iteration " .. i)\\nend\\nlocal function add(a, b)\\n    return a + b\\nend\\nprint(add(5, 7))');
             showToast('Sample loaded.');
         });
 
         clearBtn.addEventListener('click', () => {
-            input.value = '';
+            cm.setValue('');
             resultSection.style.display = 'none';
             errDetail.style.display = 'none';
             lastObfuscatedCode = '';
             shareBtn.style.display = 'none';
-            updateCounter();
         });
 
         window.onCaptchaSuccess = function() { runBtn.disabled = false; };
         window.onCaptchaExpired = function() { runBtn.disabled = true; };
 
+        function getApiKey() {
+            try { return localStorage.getItem('sttar_api_key') || ''; } catch (e) { return ''; }
+        }
+
         runBtn.addEventListener('click', () => {
-            const code = input.value.trim();
+            const code = cm.getValue().trim();
             if (!code) { showToast('Please enter some Lua code.'); return; }
             const recaptchaToken = grecaptcha.getResponse();
             if (!recaptchaToken) { showToast('Please verify you are not a robot.'); return; }
@@ -583,9 +811,13 @@ app.get('/home', (req, res) => {
             runBtn.disabled = true;
             grecaptcha.reset();
 
+            const headers = { 'Content-Type': 'application/json' };
+            const key = getApiKey();
+            if (key) headers['x-api-key'] = key;
+
             fetch('/api/obfuscate', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers,
                 body: JSON.stringify({ code, recaptchaToken, preset: selectedPreset, luaVersion: selectedLuaVersion })
             })
             .then(async response => {
@@ -605,6 +837,14 @@ app.get('/home', (req, res) => {
                 const url = URL.createObjectURL(blob);
                 downloadLink.href = url;
                 downloadLink.download = filename;
+
+                saveHistoryEntry({
+                    time: new Date().toLocaleString(),
+                    preset: selectedPreset,
+                    luaVersion: selectedLuaVersion,
+                    input: code,
+                    output: obfuscated
+                });
             })
             .catch(err => {
                 let msg = err.error || 'Obfuscation failed';
@@ -657,133 +897,146 @@ app.get('/home', (req, res) => {
             setTimeout(() => { toast.className = toast.className.replace('show', ''); }, 2000);
         }
 
-        ${CLICK_SCRIPT}
-    </script>
-</body>
-</html>`);
-});
+        // ---------- accent color picker ----------
+        const ACCENT_PRESETS = ['#ffffff', '#bb86fc', '#03dac6', '#5e9eff', '#ffb000'];
+        const accentBtn = document.getElementById('accentBtn');
+        const accentPop = document.getElementById('accentPop');
+        const swatchRow = document.getElementById('swatchRow');
+        const customColor = document.getElementById('customColor');
 
-app.get('/dashboard', (req, res) => {
-    res.send(`
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sttar — Dashboard</title>
-    ${FONT_LINK}
-    <style>
-        ${BASE_STYLE}
-        body { display: flex; }
-        .sidebar {
-            width: 240px;
-            background: var(--panel);
-            border-right: 1px solid var(--border);
-            padding: 28px 16px;
-            display: flex; flex-direction: column;
-            position: fixed; top: 0; left: 0; bottom: 0; z-index: 5;
-            transition: transform 0.25s;
+        function contrastText(hex) {
+            const c = hex.replace('#', '');
+            const r = parseInt(c.substr(0,2), 16), g = parseInt(c.substr(2,2), 16), b = parseInt(c.substr(4,2), 16);
+            const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+            return luminance > 0.6 ? '#000000' : '#ffffff';
         }
-        .sidebar .logo { font-weight: 800; font-size: 14px; margin-bottom: 28px; padding: 0 8px; }
-        .sidebar .logo span { color: var(--text-dim); font-weight: 500; }
-        .tab, .sidebar a {
-            background: none; border: none; color: var(--text-dim);
-            text-align: left; padding: 10px 12px; border-radius: 7px;
-            font-family: inherit; font-size: 13.5px; font-weight: 500;
-            margin-bottom: 2px; cursor: pointer; text-decoration: none;
-            display: block; width: 100%;
+
+        function applyAccent(hex, save) {
+            document.documentElement.style.setProperty('--accent-user', hex);
+            document.documentElement.style.setProperty('--accent-text', contrastText(hex));
+            customColor.value = hex;
+            swatchRow.querySelectorAll('.swatch').forEach(s => s.classList.toggle('selected', s.dataset.color.toLowerCase() === hex.toLowerCase()));
+            if (save !== false) {
+                try { localStorage.setItem('sttar_accent', hex); } catch (e) {}
+            }
         }
-        .tab:hover, .sidebar a:hover { color: var(--text); background: var(--panel-2); }
-        .tab.active { color: #000; background: var(--white); font-weight: 600; }
-        .main { position: relative; z-index: 1; margin-left: 240px; padding: 50px 40px; flex: 1; width: calc(100% - 240px); }
-        .panelc {
-            max-width: 640px;
-            display: none;
-        }
-        .panelc.active { display: block; }
-        .panelc h2 { font-size: clamp(1.3em, 3.5vw, 1.6em); font-weight: 700; margin-bottom: 14px; letter-spacing: -0.3px; }
-        .panelc p { line-height: 1.8; color: var(--text-dim); margin-bottom: 14px; font-size: 14px; }
-        .panelc a { color: var(--accent); font-weight: 600; text-decoration: none; }
-        .panelc a:hover { text-decoration: underline; }
-        .hamburger {
-            display: none; position: fixed; top: 16px; left: 16px; z-index: 20;
-            background: var(--panel); border: 1px solid var(--border); color: var(--text);
-            font-size: 18px; padding: 6px 12px; border-radius: 7px; cursor: pointer;
-        }
-        @media (max-width: 768px) {
-            body { flex-direction: column; }
-            .sidebar { transform: translateX(-100%); padding-top: 60px; }
-            .sidebar.open { transform: translateX(0); }
-            .hamburger { display: block; }
-            .main { margin-left: 0; width: 100%; padding: 84px 22px 30px; }
-        }
-        .overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 4; }
-        .overlay.show { display: block; }
-    </style>
-</head>
-<body>
-    <button class="hamburger" id="hamburger">☰</button>
-    <div class="overlay" id="overlay"></div>
-    <div class="sidebar" id="sidebar">
-        <div class="logo">Sttar<span> / docs</span></div>
-        <button class="tab active" data-tab="about">About</button>
-        <button class="tab" data-tab="privacy">Privacy</button>
-        <button class="tab" data-tab="usage">How to use</button>
-        <a href="/docs">API reference 🔒</a>
-    </div>
-    <div class="main">
-        <div id="about" class="panelc active">
-            <h2>About Sttar</h2>
-            <p>Sttar is a Lua obfuscation tool built for Roblox scripters. Paste a script, pick a preset, and get back a transformed version that's far harder to reverse-engineer while staying fully functional.</p>
-            <p>It runs on the Prometheus engine with a few additional passes, and supports both Lua 5.1 and LuaU output.</p>
-        </div>
-        <div id="privacy" class="panelc">
-            <h2>Privacy</h2>
-            <p>Code you submit is never stored or logged. Processing happens in memory; temp files are deleted immediately after each job completes. No accounts, no analytics on your scripts.</p>
-            <p>Questions: <a href="https://sttar-obfuscator.netlify.app" target="_blank">sttar-obfuscator.netlify.app</a></p>
-        </div>
-        <div id="usage" class="panelc">
-            <h2>How to use</h2>
-            <p>1. Open the <a href="/home">obfuscator</a>.</p>
-            <p>2. Paste or upload a .lua file.</p>
-            <p>3. Choose a preset and Lua version.</p>
-            <p>4. Complete the human check, then click Obfuscate.</p>
-            <p>5. Copy, download, or share a loadstring link (Lua 5.1 only).</p>
-        </div>
-    </div>
-    <script>
-        const tabs = document.querySelectorAll('.tab');
-        const panels = document.querySelectorAll('.panelc');
-        tabs.forEach(t => {
+
+        ACCENT_PRESETS.forEach(c => {
+            const sw = document.createElement('div');
+            sw.className = 'swatch';
+            sw.style.background = c;
+            sw.dataset.color = c;
+            sw.addEventListener('click', () => applyAccent(c));
+            swatchRow.appendChild(sw);
+        });
+        customColor.addEventListener('input', (e) => applyAccent(e.target.value));
+
+        accentBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            accentPop.classList.toggle('open');
+        });
+        document.addEventListener('click', (e) => {
+            if (!accentPop.contains(e.target) && e.target !== accentBtn) accentPop.classList.remove('open');
+        });
+
+        (function initAccent() {
+            let saved = '#ffffff';
+            try { saved = localStorage.getItem('sttar_accent') || saved; } catch (e) {}
+            applyAccent(saved, false);
+        })();
+
+        // ---------- drawer ----------
+        const menuBtn = document.getElementById('menuBtn');
+        const drawer = document.getElementById('drawer');
+        const drawerClose = document.getElementById('drawerClose');
+        const overlay = document.getElementById('overlay');
+        function openDrawer() { drawer.classList.add('open'); overlay.classList.add('show'); }
+        function closeDrawer() { drawer.classList.remove('open'); overlay.classList.remove('show'); }
+        menuBtn.addEventListener('click', openDrawer);
+        drawerClose.addEventListener('click', closeDrawer);
+        overlay.addEventListener('click', closeDrawer);
+
+        const dtabs = document.querySelectorAll('.dtab');
+        const dpanels = document.querySelectorAll('.dpanel');
+        dtabs.forEach(t => {
             t.addEventListener('click', () => {
-                const id = t.dataset.tab;
-                tabs.forEach(x => x.classList.remove('active'));
+                dtabs.forEach(x => x.classList.remove('active'));
                 t.classList.add('active');
-                panels.forEach(p => p.classList.remove('active'));
-                document.getElementById(id).classList.add('active');
-                if (window.innerWidth <= 768) {
-                    sidebar.classList.remove('open');
-                    overlay.classList.remove('show');
-                }
+                dpanels.forEach(p => p.classList.remove('active'));
+                document.getElementById('d-' + t.dataset.dtab).classList.add('active');
             });
         });
-        const hamburger = document.getElementById('hamburger');
-        const sidebar = document.getElementById('sidebar');
-        const overlay = document.getElementById('overlay');
-        hamburger.addEventListener('click', () => {
-            sidebar.classList.toggle('open');
-            overlay.classList.toggle('show');
-        });
-        overlay.addEventListener('click', () => {
-            sidebar.classList.remove('open');
-            overlay.classList.remove('show');
-        });
-        document.querySelector('.sidebar a[href="/docs"]').addEventListener('click', () => {
-            if (window.innerWidth <= 768) {
-                sidebar.classList.remove('open');
-                overlay.classList.remove('show');
+
+        // ---------- free API key ----------
+        const genKeyBtn = document.getElementById('genKeyBtn');
+        const copyKeyBtn = document.getElementById('copyKeyBtn');
+        const keyDisplay = document.getElementById('keyDisplay');
+
+        function renderKey(key) {
+            keyDisplay.textContent = key;
+            keyDisplay.style.display = 'block';
+            copyKeyBtn.style.display = 'inline-block';
+            genKeyBtn.textContent = 'Regenerate key';
+        }
+        (function initKey() {
+            const existing = getApiKey();
+            if (existing) renderKey(existing);
+        })();
+        genKeyBtn.addEventListener('click', async () => {
+            genKeyBtn.disabled = true;
+            try {
+                const res = await fetch('/api/generate-key', { method: 'POST' });
+                if (!res.ok) { const err = await res.json(); throw new Error(err.error || 'Failed to generate key'); }
+                const data = await res.json();
+                try { localStorage.setItem('sttar_api_key', data.apiKey); } catch (e) {}
+                renderKey(data.apiKey);
+                showToast('API key generated.');
+            } catch (err) {
+                showToast('Error: ' + err.message);
+            } finally {
+                genKeyBtn.disabled = false;
             }
         });
+        copyKeyBtn.addEventListener('click', async () => {
+            try { await navigator.clipboard.writeText(getApiKey()); showToast('Key copied.'); } catch (e) { showToast('Copy failed.'); }
+        });
+
+        // ---------- client-side history (last 5) ----------
+        const historyList = document.getElementById('historyList');
+        function getHistory() {
+            try { return JSON.parse(localStorage.getItem('sttar_history') || '[]'); } catch (e) { return []; }
+        }
+        function saveHistoryEntry(entry) {
+            const list = getHistory();
+            list.unshift(entry);
+            const trimmed = list.slice(0, 5);
+            try { localStorage.setItem('sttar_history', JSON.stringify(trimmed)); } catch (e) {}
+            renderHistory();
+        }
+        function renderHistory() {
+            const list = getHistory();
+            historyList.innerHTML = '';
+            if (!list.length) {
+                historyList.innerHTML = '<div class="empty-state">No obfuscations yet this browser.</div>';
+                return;
+            }
+            list.forEach((item) => {
+                const el = document.createElement('div');
+                el.className = 'hist-item';
+                el.innerHTML = '<div class="hi-top"><span>' + item.preset + ' · ' + item.luaVersion + '</span><span>' + item.time + '</span></div>' +
+                    '<div>' + (item.input.slice(0, 60).replace(/</g, '&lt;')) + (item.input.length > 60 ? '…' : '') + '</div>';
+                el.addEventListener('click', () => {
+                    cm.setValue(item.input);
+                    resultCode.textContent = item.output;
+                    lastObfuscatedCode = item.output;
+                    resultSection.style.display = 'block';
+                    closeDrawer();
+                    showToast('Loaded from history.');
+                });
+                historyList.appendChild(el);
+            });
+        }
+        renderHistory();
 
         ${CLICK_SCRIPT}
     </script>
