@@ -57,6 +57,9 @@ async function verifyRecaptcha(token) {
 const PROMETHEUS_CLI = path.join(__dirname, 'Prometheus', 'cli.lua');
 const TEMP_DIR = os.tmpdir();
 
+const ALLOWED_PRESETS = ['Minify', 'Weak', 'Medium', 'Strong'];
+const ALLOWED_LUA_VERSIONS = ['lua51', 'luau'];
+
 function execFileAsync(cmd, args) {
     return new Promise((resolve, reject) => {
         execFile(cmd, args, (error, stdout, stderr) => {
@@ -66,46 +69,68 @@ function execFileAsync(cmd, args) {
     });
 }
 
-// ================== SHARED DESIGN TOKENS (used inline in every page) ==================
-// Background: #060608 (near-black)  |  Card: rgba(18,18,22,.82)  |  Border: rgba(255,255,255,.07)
-// Accent gradient: #bb86fc -> #03dac6   |  Text: #e6e6ea / #8a8a93
-// Signature motion: a sonar-style "ping" ripple fires from the cursor on every click.
+// ================== DESIGN SYSTEM ==================
+// Concept: Vercel/Linear-style monochrome SaaS console. Pure black canvas, hairline borders,
+// a single white CTA, Inter type, segmented pill controls. Motion is restrained: a quick
+// scale-down on press plus a soft white ring that expands and fades from the click point.
 
-const CLICK_RIPPLE_STYLE = `
-        .click-ripple {
+const FONT_LINK = `<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">`;
+
+const BASE_STYLE = `
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --bg: #000000;
+            --panel: #0a0a0a;
+            --panel-2: #0d0d0d;
+            --border: #1f1f1f;
+            --border-hover: #333333;
+            --text: #ededed;
+            --text-dim: #8a8a8a;
+            --text-dimmer: #555555;
+            --white: #ffffff;
+            --danger: #f87171;
+            --accent: #5e9eff;
+        }
+        html, body { background: var(--bg); }
+        body {
+            color: var(--text);
+            font-family: 'Inter', -apple-system, sans-serif;
+            min-height: 100vh;
+            -webkit-font-smoothing: antialiased;
+        }
+        a { color: inherit; }
+        .click-ring {
             position: fixed;
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-            border: 2px solid #bb86fc;
-            box-shadow: 0 0 16px rgba(187,134,252,0.55);
-            transform: translate(-50%, -50%) scale(0);
             pointer-events: none;
             z-index: 9999;
-            animation: clickPulse 0.55s cubic-bezier(0.2, 0.8, 0.3, 1) forwards;
+            width: 16px; height: 16px;
+            border-radius: 50%;
+            border: 1px solid rgba(255,255,255,0.5);
+            transform: translate(-50%, -50%) scale(0.3);
+            opacity: 0.6;
+            animation: clickRing 0.45s ease-out forwards;
         }
-        @keyframes clickPulse {
-            0% { transform: translate(-50%, -50%) scale(0); opacity: 0.85; }
-            100% { transform: translate(-50%, -50%) scale(7); opacity: 0; }
+        @keyframes clickRing {
+            to { transform: translate(-50%, -50%) scale(5.5); opacity: 0; }
         }
-        button, a, .tab-btn { transition: transform 0.12s ease, box-shadow 0.2s ease, background 0.2s ease, color 0.2s ease; }
-        button:active, a:active, .tab-btn:active { transform: scale(0.94); }
+        button, a.btn, .pill, .tab { transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease, transform 0.1s ease; }
+        button:active, a.btn:active, .pill:active, .tab:active { transform: scale(0.97); }
         @media (prefers-reduced-motion: reduce) {
-            .click-ripple { display: none; }
-            button:active, a:active, .tab-btn:active { transform: none; }
+            .click-ring { display: none; }
+            button:active, a.btn:active, .pill:active, .tab:active { transform: none; }
         }`;
 
-const CLICK_RIPPLE_SCRIPT = `
+const CLICK_SCRIPT = `
         (function () {
             document.addEventListener('click', function (e) {
-                const target = e.target.closest('button, a, .tab-btn');
+                const target = e.target.closest('button, a, .pill, .tab');
                 if (!target || target.disabled) return;
-                const ripple = document.createElement('span');
-                ripple.className = 'click-ripple';
-                ripple.style.left = e.clientX + 'px';
-                ripple.style.top = e.clientY + 'px';
-                document.body.appendChild(ripple);
-                ripple.addEventListener('animationend', () => ripple.remove());
+                const ring = document.createElement('span');
+                ring.className = 'click-ring';
+                ring.style.left = e.clientX + 'px';
+                ring.style.top = e.clientY + 'px';
+                document.body.appendChild(ring);
+                ring.addEventListener('animationend', () => ring.remove());
             });
         })();`;
 
@@ -117,77 +142,43 @@ app.get('/', (req, res) => {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sttar Obfuscator</title>
+    <title>Sttar</title>
+    ${FONT_LINK}
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            background: #060608;
-            color: #e6e6ea;
-            font-family: 'Inter', sans-serif;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            padding: 20px;
-            text-align: center;
-            position: relative;
-            overflow-x: hidden;
-        }
-        body::before {
-            content: "";
-            position: fixed;
-            top: 0; left: 0; width: 100%; height: 100%;
-            background: radial-gradient(circle at 30% 20%, rgba(138, 43, 226, 0.10), transparent 50%),
-                        radial-gradient(circle at 70% 80%, rgba(0, 255, 255, 0.06), transparent 50%);
-            pointer-events: none;
-            z-index: 0;
-        }
+        ${BASE_STYLE}
+        body { display: flex; align-items: center; justify-content: center; padding: 24px; }
         .card {
-            position: relative;
-            z-index: 1;
-            background: rgba(18,18,22,0.82);
-            backdrop-filter: blur(15px);
-            border: 1px solid rgba(255,255,255,0.07);
-            border-radius: 20px;
-            padding: 40px;
-            max-width: 500px;
-            box-shadow: 0 20px 50px rgba(0,0,0,0.6);
-            animation: fadeSlideUp 0.5s ease-out;
+            width: 100%; max-width: 420px;
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 36px 32px;
+            text-align: center;
         }
-        @keyframes fadeSlideUp {
-            from { opacity: 0; transform: translateY(15px); }
-            to { opacity: 1; transform: translateY(0); }
+        .badge {
+            display: inline-block; font-size: 11px; font-weight: 600; letter-spacing: 0.5px;
+            text-transform: uppercase; color: var(--text-dim);
+            border: 1px solid var(--border); border-radius: 20px; padding: 4px 12px;
+            margin-bottom: 18px;
         }
-        h1 {
-            font-size: 2.2em;
-            background: linear-gradient(135deg, #bb86fc, #03dac6);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            margin-bottom: 15px;
-        }
-        p { color: #8a8a93; margin-bottom: 20px; }
-        a {
-            display: inline-block;
-            background: linear-gradient(135deg, #bb86fc, #7c4dff);
-            color: #fff;
-            padding: 14px 30px;
-            border-radius: 30px;
-            font-weight: 600;
+        h1 { font-size: 1.5em; font-weight: 700; margin-bottom: 10px; }
+        p { color: var(--text-dim); font-size: 14px; margin-bottom: 24px; line-height: 1.6; }
+        a.btn {
+            display: inline-block; background: var(--white); color: #000;
+            padding: 10px 22px; border-radius: 8px; font-weight: 600; font-size: 13.5px;
             text-decoration: none;
         }
-        a:hover {
-            box-shadow: 0 10px 25px rgba(187,134,252,0.4);
-        }
-        ${CLICK_RIPPLE_STYLE}
+        a.btn:hover { background: #d9d9d9; }
     </style>
 </head>
 <body>
     <div class="card">
-        <h1>Sttar Obfuscator</h1>
-        <p>Invalid route. If you want to use our obfuscator, please go to:</p>
-        <a href="/home">https://sttar-obfuscators.onrender.com/home</a>
+        <span class="badge">404</span>
+        <h1>This route doesn't exist</h1>
+        <p>The obfuscator lives at /home.</p>
+        <a class="btn" href="/home">Go to console →</a>
     </div>
-    <script>${CLICK_RIPPLE_SCRIPT}</script>
+    <script>${CLICK_SCRIPT}</script>
 </body>
 </html>`);
 });
@@ -203,7 +194,12 @@ app.get('/raw/:id', (req, res) => {
 app.post('/api/obfuscate', async (req, res) => {
     const rawCode = req.body.code;
     const recaptchaToken = req.body.recaptchaToken;
-    const preset = 'Medium';
+
+    let preset = req.body.preset || 'Medium';
+    if (!ALLOWED_PRESETS.includes(preset)) preset = 'Medium';
+
+    let luaVersion = req.body.luaVersion || 'lua51';
+    if (!ALLOWED_LUA_VERSIONS.includes(luaVersion)) luaVersion = 'lua51';
 
     if (!rawCode) return res.status(400).json({ error: 'No code provided.' });
 
@@ -223,7 +219,14 @@ app.post('/api/obfuscate', async (req, res) => {
 
     try {
         fs.writeFileSync(inputFile, rawCode);
-        await execFileAsync('luajit', [PROMETHEUS_CLI, '--preset', preset, inputFile, '--out', outputFile]);
+
+        // NOTE: adjust the LuaU flag below to match whatever flag your actual
+        // Prometheus cli.lua build uses to target LuaU vs Lua 5.1 output.
+        const cliArgs = [PROMETHEUS_CLI, '--preset', preset];
+        if (luaVersion === 'luau') cliArgs.push('--LuaU');
+        cliArgs.push(inputFile, '--out', outputFile);
+
+        await execFileAsync('luajit', cliArgs);
 
         if (!fs.existsSync(outputFile)) {
             cleanup();
@@ -279,353 +282,264 @@ app.get('/home', (req, res) => {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sttar Obfuscator</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <title>Sttar — Lua Obfuscator</title>
+    ${FONT_LINK}
     <script src="https://www.google.com/recaptcha/api.js" async defer></script>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            background-color: #060608;
-            color: #e6e6ea;
-            font-family: 'Inter', sans-serif;
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-            padding: 20px;
-            position: relative;
-            overflow-x: hidden;
+        ${BASE_STYLE}
+        body { display: flex; flex-direction: column; align-items: center; padding: 0 16px 60px; }
+        .nav {
+            width: 100%; max-width: 760px;
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 22px 0;
         }
-        body::before {
-            content: "";
-            position: fixed;
-            top: 0; left: 0;
-            width: 100%; height: 100%;
-            background: radial-gradient(circle at 30% 20%, rgba(138, 43, 226, 0.10), transparent 50%),
-                        radial-gradient(circle at 70% 80%, rgba(0, 255, 255, 0.06), transparent 50%);
-            pointer-events: none;
-            z-index: 0;
+        .logo { font-weight: 800; font-size: 14px; letter-spacing: -0.2px; }
+        .logo span { color: var(--text-dim); font-weight: 500; }
+        .nav a {
+            font-size: 13px; color: var(--text-dim); text-decoration: none;
+            border: 1px solid var(--border); padding: 7px 14px; border-radius: 7px;
         }
-        .navbar {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            z-index: 10;
-            display: flex;
-            gap: 20px;
-            align-items: center;
+        .nav a:hover { color: var(--text); border-color: var(--border-hover); }
+        .hero { width: 100%; max-width: 760px; margin: 18px 0 28px; }
+        .hero h1 { font-size: clamp(1.6em, 4.5vw, 2.1em); font-weight: 700; letter-spacing: -0.5px; margin-bottom: 8px; }
+        .hero p { color: var(--text-dim); font-size: 14.5px; }
+        .panel {
+            width: 100%; max-width: 760px;
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: clamp(18px, 4vw, 28px);
         }
-        .navbar a {
-            color: #8a8a93;
-            text-decoration: none;
-            font-size: 14px;
-            font-weight: 600;
-            letter-spacing: 0.5px;
-            padding: 5px 10px;
+        .section-label {
+            font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.6px;
+            color: var(--text-dim); margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center;
         }
-        .navbar a:hover { color: #bb86fc; }
-        .main-container {
-            position: relative;
-            z-index: 1;
-            width: 100%;
-            max-width: 900px;
-            background: rgba(18,18,22,0.82);
-            backdrop-filter: blur(25px);
-            border: 1px solid rgba(255,255,255,0.08);
-            border-radius: 24px;
-            padding: clamp(20px, 5vw, 40px);
-            box-shadow: 0 30px 60px rgba(0,0,0,0.6);
-            animation: fadeSlideUp 0.5s ease-out;
-        }
-        @keyframes fadeSlideUp {
-            from { opacity: 0; transform: translateY(15px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        h1 {
-            font-size: clamp(2em, 6vw, 2.8em);
-            font-weight: 700;
-            text-align: center;
-            margin-bottom: 10px;
-            background: linear-gradient(135deg, #bb86fc, #03dac6);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            line-height: 1.2;
-        }
-        .subtitle {
-            text-align: center;
-            color: #8a8a93;
-            margin-bottom: 25px;
-            font-size: clamp(14px, 2vw, 16px);
-        }
-        .controls-row {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-            align-items: center;
-            margin-bottom: 15px;
-        }
-        .file-upload-btn {
-            display: inline-block;
-            background: rgba(187,134,252,0.15);
-            border: 1px solid rgba(187,134,252,0.4);
-            color: #e6e6ea;
-            padding: 8px 14px;
-            border-radius: 10px;
-            font-size: 14px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: border 0.3s;
-        }
-        .file-upload-btn:focus { border-color: #bb86fc; }
+        .upload-link { color: var(--text-dim); font-weight: 500; text-transform: none; letter-spacing: 0; cursor: pointer; font-size: 12.5px; }
+        .upload-link:hover { color: var(--text); }
         textarea {
             width: 100%;
-            height: clamp(200px, 50vh, 280px);
-            background: #0d0d10;
-            border: 1px solid #232328;
-            border-radius: 16px;
-            padding: 20px;
-            color: #e6e6ea;
-            font-family: 'Fira Code', monospace;
-            font-size: 14px;
+            height: clamp(190px, 42vh, 260px);
+            background: var(--panel-2);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 16px;
+            color: var(--text);
+            font-family: 'Menlo', 'Consolas', monospace;
+            font-size: 13px;
             resize: vertical;
-            transition: border 0.3s, box-shadow 0.3s;
         }
-        textarea:focus {
-            outline: none;
-            border-color: #bb86fc;
-            box-shadow: 0 0 0 3px rgba(187,134,252,0.3);
+        textarea::placeholder { color: var(--text-dimmer); }
+        textarea:focus { outline: none; border-color: var(--border-hover); }
+        .meta { display: flex; justify-content: space-between; color: var(--text-dimmer); font-size: 11.5px; margin-top: 8px; }
+
+        .controls { margin-top: 22px; display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+        @media (max-width: 560px) { .controls { grid-template-columns: 1fr; } }
+        .pill-group {
+            display: flex; gap: 4px; background: var(--panel-2);
+            border: 1px solid var(--border); border-radius: 9px; padding: 4px;
         }
-        .counter {
-            text-align: right;
-            color: #8a8a93;
-            font-size: 13px;
-            margin-top: 5px;
+        .pill {
+            flex: 1; text-align: center;
+            background: transparent; border: none; color: var(--text-dim);
+            font-family: inherit; font-size: 12.5px; font-weight: 600;
+            padding: 8px 6px; border-radius: 6px; cursor: pointer;
         }
-        .captcha-container {
-            display: flex;
-            justify-content: center;
-            margin: 15px 0;
-        }
-        .button-row {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-            margin-top: 15px;
-            justify-content: center;
-        }
-        .obfuscate-btn, .clear-btn, .sample-btn, .share-btn {
-            padding: 12px 25px;
-            border-radius: 50px;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 1px;
+        .pill.active { background: var(--white); color: #000; }
+        .pill:not(.active):hover { color: var(--text); }
+        .hint { font-size: 11.5px; color: var(--text-dimmer); margin-top: 7px; }
+
+        .captcha-row { display: flex; justify-content: center; margin: 24px 0 4px; }
+        .actions { display: flex; gap: 10px; margin-top: 18px; flex-wrap: wrap; }
+        button {
+            font-family: 'Inter', sans-serif;
+            padding: 11px 18px;
+            border-radius: 9px;
+            font-weight: 600;
+            font-size: 13.5px;
             cursor: pointer;
-            font-size: 14px;
-            border: none;
-            color: #fff;
+            border: 1px solid var(--border);
+            background: transparent;
+            color: var(--text-dim);
         }
-        .obfuscate-btn {
-            background: linear-gradient(135deg, #bb86fc, #7c4dff);
-            color: #fff;
+        button:hover { border-color: var(--border-hover); color: var(--text); }
+        #runBtn {
+            flex: 1;
+            background: var(--white);
+            color: #000;
+            border-color: var(--white);
         }
-        .obfuscate-btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-        .clear-btn {
-            background: rgba(255,255,255,0.08);
-            border: 1px solid #232328;
-            color: #e6e6ea;
-        }
-        .sample-btn {
-            background: rgba(3, 218, 198, 0.15);
-            border: 1px solid rgba(3, 218, 198, 0.5);
-            color: #03dac6;
-        }
-        .share-btn {
-            background: rgba(255, 215, 0, 0.2);
-            border: 1px solid rgba(255, 215, 0, 0.5);
-            color: #ffd700;
-            display: none;
-        }
-        .obfuscate-btn:hover:not(:disabled), .clear-btn:hover, .sample-btn:hover, .share-btn:hover {
-            box-shadow: 0 10px 20px rgba(187,134,252,0.3);
-        }
-        .loading {
-            display: none;
-            text-align: center;
-            margin-top: 25px;
-        }
-        .loader {
-            width: 40px;
-            height: 40px;
-            border: 3px solid rgba(187,134,252,0.3);
-            border-top-color: #bb86fc;
-            border-radius: 50%;
-            animation: spin 0.8s linear infinite;
-            margin: 0 auto 10px;
-        }
+        #runBtn:hover { background: #d9d9d9; }
+        #runBtn:disabled { opacity: 0.35; cursor: not-allowed; background: var(--text-dim); border-color: var(--text-dim); }
+        #shareBtn { border-color: var(--accent); color: var(--accent); display: none; }
+        #shareBtn:hover { background: rgba(94,158,255,0.1); }
+
+        .loading { display: none; align-items: center; gap: 10px; margin-top: 20px; color: var(--text-dim); font-size: 13px; }
+        .spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--border); border-top-color: var(--text); animation: spin 0.7s linear infinite; }
         @keyframes spin { to { transform: rotate(360deg); } }
-        .result-section {
-            display: none;
-            margin-top: 30px;
-            animation: fadeSlideUp 0.5s ease-out;
+
+        .result { display: none; margin-top: 26px; }
+        .result-bar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+        .result-bar h3 { font-size: 13px; font-weight: 600; color: var(--text); }
+        .actbtns { display: flex; gap: 8px; flex-wrap: wrap; }
+        .actbtns button, .actbtns a.btn {
+            border: 1px solid var(--border); color: var(--text-dim);
+            background: transparent; padding: 7px 14px; border-radius: 7px;
+            font-size: 12px; text-decoration: none; cursor: pointer; font-family: inherit; font-weight: 600;
         }
-        .result-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 10px;
-            flex-wrap: wrap;
-            gap: 10px;
-        }
-        .result-header h3 {
-            color: #bb86fc;
-            font-weight: 600;
-            font-size: 1.2em;
-        }
-        .action-btns {
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-        }
-        .action-btns button, .action-btns a {
-            background: rgba(187,134,252,0.15);
-            border: 1px solid rgba(187,134,252,0.4);
-            color: #e6e6ea;
-            padding: 8px 18px;
-            border-radius: 30px;
-            font-size: 14px;
-            font-weight: 600;
-            cursor: pointer;
-            text-decoration: none;
-            display: inline-block;
-        }
-        .action-btns button:hover, .action-btns a:hover {
-            background: rgba(187,134,252,0.3);
-            border-color: #bb86fc;
-        }
+        .actbtns button:hover, .actbtns a.btn:hover { border-color: var(--border-hover); color: var(--text); }
         pre {
-            background: #0d0d10;
-            border: 1px solid #232328;
-            border-radius: 16px;
-            padding: 20px;
-            font-family: 'Fira Code', monospace;
-            font-size: 13px;
+            background: var(--panel-2);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 18px;
+            font-size: 12.5px;
             overflow-x: auto;
             white-space: pre-wrap;
             word-break: break-word;
-            max-height: 400px;
-            color: #e6e6ea;
-            line-height: 1.6;
+            max-height: 380px;
+            color: var(--text);
+            line-height: 1.55;
+            font-family: 'Menlo', 'Consolas', monospace;
         }
+        #errDetail { color: var(--danger); margin-top: 10px; display: none; font-size: 12.5px; }
         .toast {
             visibility: hidden;
-            position: fixed;
-            bottom: 30px;
-            left: 50%;
-            transform: translateX(-50%);
-            background: #1c1c20;
-            color: white;
-            padding: 12px 30px;
-            border-radius: 30px;
-            font-weight: 600;
-            z-index: 999;
-            box-shadow: 0 10px 20px rgba(0,0,0,0.5);
-            font-size: 14px;
-            white-space: nowrap;
-            border: 1px solid rgba(255,255,255,0.08);
+            position: fixed; bottom: 26px; left: 50%; transform: translateX(-50%);
+            background: var(--panel); color: var(--text); border: 1px solid var(--border);
+            padding: 10px 20px; border-radius: 9px; font-size: 12.5px;
+            z-index: 999; white-space: nowrap;
         }
-        .toast.show {
-            visibility: visible;
-            animation: fadeInOut 2s ease;
-        }
+        .toast.show { visibility: visible; animation: fadeInOut 2s ease; }
         @keyframes fadeInOut {
-            0% { opacity: 0; bottom: 20px; }
-            10% { opacity: 1; bottom: 30px; }
-            90% { opacity: 1; bottom: 30px; }
-            100% { opacity: 0; bottom: 20px; }
+            0% { opacity: 0; bottom: 16px; } 10% { opacity: 1; bottom: 26px; }
+            90% { opacity: 1; bottom: 26px; } 100% { opacity: 0; bottom: 16px; }
         }
-        @media (max-width: 600px) {
-            .navbar { top: 10px; right: 10px; }
-            .navbar a { margin-left: 10px; font-size: 13px; }
-            .main-container { padding: 20px 15px; }
-            .action-btns { flex-direction: column; width: 100%; }
-            .action-btns button, .action-btns a { text-align: center; }
-            pre { font-size: 12px; }
+        @media (max-width: 560px) {
+            .actbtns { flex-direction: column; width: 100%; }
+            .actbtns button, .actbtns a.btn { text-align: center; }
         }
-        ${CLICK_RIPPLE_STYLE}
     </style>
 </head>
 <body>
-    <nav class="navbar">
+    <div class="nav">
+        <div class="logo">Sttar<span> / obfuscator</span></div>
         <a href="/dashboard">Dashboard</a>
-    </nav>
-    <div class="main-container">
-        <h1>Sttar Obfuscator</h1>
-        <p class="subtitle">Paste your Lua code below and get obfuscated output instantly. Verify you are human first.</p>
-        <div class="controls-row">
-            <label for="fileUpload" class="file-upload-btn">
-                Upload .lua
-                <input type="file" id="fileUpload" accept=".lua" style="display:none">
-            </label>
+    </div>
+    <div class="hero">
+        <h1>Obfuscate your Lua scripts</h1>
+        <p>Paste code, pick a preset, verify you're human, and run.</p>
+    </div>
+    <div class="panel">
+        <div class="section-label">
+            <span>Source</span>
+            <span class="upload-link" id="uploadLink">Upload .lua file</span>
+            <input type="file" id="fileUpload" accept=".lua" style="display:none">
         </div>
-        <textarea id="luaInput" placeholder="-- Write your Lua script here..."></textarea>
-        <div class="counter" id="counter">Lines: 0 | Characters: 0</div>
-        <div class="captcha-container">
+        <textarea id="luaInput" placeholder="-- paste your Lua script here"></textarea>
+        <div class="meta"><span id="counter">0 lines · 0 chars</span></div>
+
+        <div class="controls">
+            <div>
+                <div class="section-label">Obfuscation preset</div>
+                <div class="pill-group" id="presetGroup">
+                    <button type="button" class="pill" data-value="Minify">Minify</button>
+                    <button type="button" class="pill" data-value="Weak">Weak</button>
+                    <button type="button" class="pill active" data-value="Medium">Medium</button>
+                    <button type="button" class="pill" data-value="Strong">Strong</button>
+                </div>
+            </div>
+            <div>
+                <div class="section-label">Lua version</div>
+                <div class="pill-group" id="luaVersionGroup">
+                    <button type="button" class="pill active" data-value="lua51">Lua 5.1</button>
+                    <button type="button" class="pill" data-value="luau">LuaU</button>
+                </div>
+                <div class="hint" id="luauHint" style="display:none;">LuaU output disables the loadstring Share link.</div>
+            </div>
+        </div>
+
+        <div class="captcha-row">
             <div class="g-recaptcha" data-sitekey="${RECAPTCHA_SITE_KEY}" data-callback="onCaptchaSuccess" data-expired-callback="onCaptchaExpired"></div>
         </div>
-        <div class="button-row">
-            <button class="sample-btn" id="sampleBtn">Load Sample</button>
-            <button class="clear-btn" id="clearBtn">Clear</button>
-            <button class="obfuscate-btn" id="obfBtn" disabled>Obfuscate</button>
-            <button class="share-btn" id="shareBtn">Share</button>
+
+        <div class="actions">
+            <button id="sampleBtn" type="button">Load sample</button>
+            <button id="clearBtn" type="button">Clear</button>
+            <button id="runBtn" type="button" disabled>Obfuscate</button>
         </div>
-        <div class="loading" id="loading">
-            <div class="loader"></div>
-            <p>Obfuscating...</p>
-        </div>
-        <div class="result-section" id="resultSection">
-            <div class="result-header">
-                <h3>Obfuscated Result</h3>
-                <div class="action-btns">
-                    <button id="copyBtn">Copy</button>
-                    <a id="downloadLink" href="#" download="">Download .lua</a>
+
+        <div class="loading" id="loading"><div class="spin"></div><span>Obfuscating…</span></div>
+
+        <div class="result" id="resultSection">
+            <div class="result-bar">
+                <h3>Output</h3>
+                <div class="actbtns">
+                    <button id="copyBtn" type="button">Copy</button>
+                    <a id="downloadLink" class="btn" href="#" download="">Download .lua</a>
+                    <button id="shareBtn" type="button">Share loader</button>
                 </div>
             </div>
             <pre id="resultCode"></pre>
-            <div id="errorDetail" style="color:#f87171; margin-top:10px; display:none;"></div>
+            <div id="errDetail"></div>
         </div>
     </div>
     <div class="toast" id="toast"></div>
     <script>
         const input = document.getElementById('luaInput');
-        const obfBtn = document.getElementById('obfBtn');
+        const runBtn = document.getElementById('runBtn');
         const clearBtn = document.getElementById('clearBtn');
         const sampleBtn = document.getElementById('sampleBtn');
         const shareBtn = document.getElementById('shareBtn');
         const loading = document.getElementById('loading');
         const resultSection = document.getElementById('resultSection');
         const resultCode = document.getElementById('resultCode');
-        const errorDetail = document.getElementById('errorDetail');
+        const errDetail = document.getElementById('errDetail');
         const copyBtn = document.getElementById('copyBtn');
         const downloadLink = document.getElementById('downloadLink');
         const toast = document.getElementById('toast');
         const fileUpload = document.getElementById('fileUpload');
+        const uploadLink = document.getElementById('uploadLink');
         const counter = document.getElementById('counter');
+        const presetGroup = document.getElementById('presetGroup');
+        const luaVersionGroup = document.getElementById('luaVersionGroup');
+        const luauHint = document.getElementById('luauHint');
 
         let lastObfuscatedCode = '';
+        let selectedPreset = 'Medium';
+        let selectedLuaVersion = 'lua51';
 
         function updateCounter() {
             const text = input.value;
             const lines = text.split('\\n').length;
             const chars = text.length;
-            counter.textContent = 'Lines: ' + lines + ' | Characters: ' + chars;
+            counter.textContent = lines + ' lines · ' + chars + ' chars';
         }
         input.addEventListener('input', updateCounter);
         updateCounter();
 
+        function wireGroup(group, onSelect) {
+            group.querySelectorAll('.pill').forEach(p => {
+                p.addEventListener('click', () => {
+                    group.querySelectorAll('.pill').forEach(x => x.classList.remove('active'));
+                    p.classList.add('active');
+                    onSelect(p.dataset.value);
+                });
+            });
+        }
+
+        wireGroup(presetGroup, (val) => { selectedPreset = val; });
+        wireGroup(luaVersionGroup, (val) => {
+            selectedLuaVersion = val;
+            const isLuau = val === 'luau';
+            luauHint.style.display = isLuau ? 'block' : 'none';
+            if (isLuau) {
+                shareBtn.style.display = 'none';
+            } else if (lastObfuscatedCode) {
+                shareBtn.style.display = 'inline-block';
+            }
+        });
+
+        uploadLink.addEventListener('click', () => fileUpload.click());
         fileUpload.addEventListener('change', (e) => {
             const file = e.target.files[0];
             if (!file) return;
@@ -639,64 +553,51 @@ app.get('/home', (req, res) => {
         });
 
         sampleBtn.addEventListener('click', () => {
-            input.value = '-- Sample Lua code\\nprint("Hello from Sttar Obfuscator!")\\nfor i = 1, 3 do\\n    print("Iteration: " .. i)\\nend\\nlocal function add(a, b)\\n    return a + b\\nend\\nprint(add(5, 7))';
+            input.value = '-- sample script\\nprint("hello from sttar")\\nfor i = 1, 3 do\\n    print("iteration " .. i)\\nend\\nlocal function add(a, b)\\n    return a + b\\nend\\nprint(add(5, 7))';
             updateCounter();
-            showToast('Sample code loaded.');
+            showToast('Sample loaded.');
         });
 
         clearBtn.addEventListener('click', () => {
             input.value = '';
             resultSection.style.display = 'none';
-            errorDetail.style.display = 'none';
+            errDetail.style.display = 'none';
             lastObfuscatedCode = '';
             shareBtn.style.display = 'none';
             updateCounter();
         });
 
-        window.onCaptchaSuccess = function() {
-            obfBtn.disabled = false;
-        };
-        window.onCaptchaExpired = function() {
-            obfBtn.disabled = true;
-        };
+        window.onCaptchaSuccess = function() { runBtn.disabled = false; };
+        window.onCaptchaExpired = function() { runBtn.disabled = true; };
 
-        obfBtn.addEventListener('click', () => {
+        runBtn.addEventListener('click', () => {
             const code = input.value.trim();
-            if (!code) {
-                showToast('Please enter some Lua code.');
-                return;
-            }
+            if (!code) { showToast('Please enter some Lua code.'); return; }
             const recaptchaToken = grecaptcha.getResponse();
-            if (!recaptchaToken) {
-                showToast('Please verify you are not a robot.');
-                return;
-            }
+            if (!recaptchaToken) { showToast('Please verify you are not a robot.'); return; }
 
-            loading.style.display = 'block';
+            loading.style.display = 'flex';
             resultSection.style.display = 'none';
-            errorDetail.style.display = 'none';
+            errDetail.style.display = 'none';
             shareBtn.style.display = 'none';
-            obfBtn.disabled = true;
+            runBtn.disabled = true;
             grecaptcha.reset();
 
             fetch('/api/obfuscate', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ code, recaptchaToken })
+                body: JSON.stringify({ code, recaptchaToken, preset: selectedPreset, luaVersion: selectedLuaVersion })
             })
             .then(async response => {
-                if (!response.ok) {
-                    const err = await response.json();
-                    throw err;
-                }
+                if (!response.ok) { const err = await response.json(); throw err; }
                 return response.text();
             })
             .then(obfuscated => {
                 resultCode.textContent = obfuscated;
                 lastObfuscatedCode = obfuscated;
                 resultSection.style.display = 'block';
-                errorDetail.style.display = 'none';
-                shareBtn.style.display = 'inline-block';
+                errDetail.style.display = 'none';
+                shareBtn.style.display = (selectedLuaVersion === 'luau') ? 'none' : 'inline-block';
 
                 const randomStr = Math.random().toString(36).substr(2, 8);
                 const filename = 'Sttar_ObfuscatedCode_' + randomStr + '.lua';
@@ -710,22 +611,19 @@ app.get('/home', (req, res) => {
                 let detail = err.detail || '';
                 showToast('Error: ' + msg);
                 if (detail) {
-                    errorDetail.textContent = 'Details: ' + detail;
-                    errorDetail.style.display = 'block';
+                    errDetail.textContent = detail;
+                    errDetail.style.display = 'block';
                 }
             })
             .finally(() => {
                 loading.style.display = 'none';
-                obfBtn.disabled = false;
-                if (!grecaptcha.getResponse()) obfBtn.disabled = true;
+                runBtn.disabled = false;
+                if (!grecaptcha.getResponse()) runBtn.disabled = true;
             });
         });
 
         shareBtn.addEventListener('click', async () => {
-            if (!lastObfuscatedCode) {
-                showToast('No obfuscated code to share.');
-                return;
-            }
+            if (!lastObfuscatedCode) { showToast('No obfuscated code to share.'); return; }
             shareBtn.disabled = true;
             try {
                 const response = await fetch('/api/share', {
@@ -733,10 +631,7 @@ app.get('/home', (req, res) => {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ code: lastObfuscatedCode })
                 });
-                if (!response.ok) {
-                    const err = await response.json();
-                    throw new Error(err.error || 'Share failed');
-                }
+                if (!response.ok) { const err = await response.json(); throw new Error(err.error || 'Share failed'); }
                 const data = await response.json();
                 await navigator.clipboard.writeText(data.loaderScript);
                 showToast('Loader copied! Paste in executor.');
@@ -762,7 +657,7 @@ app.get('/home', (req, res) => {
             setTimeout(() => { toast.className = toast.className.replace('show', ''); }, 2000);
         }
 
-        ${CLICK_RIPPLE_SCRIPT}
+        ${CLICK_SCRIPT}
     </script>
 </body>
 </html>`);
@@ -775,196 +670,97 @@ app.get('/dashboard', (req, res) => {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sttar Obfuscator – Dashboard</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <title>Sttar — Dashboard</title>
+    ${FONT_LINK}
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            background: #060608;
-            color: #e6e6ea;
-            font-family: 'Inter', sans-serif;
-            display: flex;
-            min-height: 100vh;
-            position: relative;
-            overflow-x: hidden;
-        }
-        body::before {
-            content: "";
-            position: fixed;
-            top: 0; left: 0; width: 100%; height: 100%;
-            background: radial-gradient(circle at 80% 10%, rgba(138, 43, 226, 0.08), transparent 50%),
-                        radial-gradient(circle at 10% 90%, rgba(0, 255, 255, 0.05), transparent 50%);
-            pointer-events: none;
-            z-index: 0;
-        }
+        ${BASE_STYLE}
+        body { display: flex; }
         .sidebar {
-            width: 260px;
-            background: rgba(18,18,22,0.92);
-            backdrop-filter: blur(15px);
-            border-right: 1px solid rgba(255,255,255,0.07);
-            padding: 40px 20px;
-            display: flex;
-            flex-direction: column;
-            position: fixed;
-            top: 0; left: 0; bottom: 0;
-            z-index: 5;
-            transition: transform 0.3s;
+            width: 240px;
+            background: var(--panel);
+            border-right: 1px solid var(--border);
+            padding: 28px 16px;
+            display: flex; flex-direction: column;
+            position: fixed; top: 0; left: 0; bottom: 0; z-index: 5;
+            transition: transform 0.25s;
         }
-        .sidebar h2 {
-            font-size: 1.5em;
-            margin-bottom: 40px;
-            font-weight: 700;
-            background: linear-gradient(135deg, #bb86fc, #03dac6);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            text-align: center;
+        .sidebar .logo { font-weight: 800; font-size: 14px; margin-bottom: 28px; padding: 0 8px; }
+        .sidebar .logo span { color: var(--text-dim); font-weight: 500; }
+        .tab, .sidebar a {
+            background: none; border: none; color: var(--text-dim);
+            text-align: left; padding: 10px 12px; border-radius: 7px;
+            font-family: inherit; font-size: 13.5px; font-weight: 500;
+            margin-bottom: 2px; cursor: pointer; text-decoration: none;
+            display: block; width: 100%;
         }
-        .sidebar a, .sidebar button {
-            background: none;
-            border: none;
-            color: #8a8a93;
-            text-align: left;
-            padding: 14px 18px;
-            border-radius: 12px;
-            font-size: 15px;
-            font-weight: 600;
-            margin-bottom: 5px;
-            cursor: pointer;
-            transition: all 0.25s;
-            text-decoration: none;
-            display: block;
-            width: 100%;
-        }
-        .sidebar a:hover, .sidebar button:hover {
-            background: rgba(187,134,252,0.1);
-            color: #fff;
-        }
-        .sidebar a.active, .sidebar button.active {
-            background: rgba(187,134,252,0.25);
-            color: #bb86fc;
-        }
-        .main-content {
-            position: relative;
-            z-index: 1;
-            margin-left: 260px;
-            padding: 60px 50px;
-            flex: 1;
-            animation: fadeIn 0.5s ease;
-            width: calc(100% - 260px);
-        }
-        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-        .content-panel {
-            background: rgba(18,18,22,0.78);
-            backdrop-filter: blur(20px);
-            border: 1px solid rgba(255,255,255,0.07);
-            border-radius: 24px;
-            padding: clamp(25px, 5vw, 40px);
-            box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+        .tab:hover, .sidebar a:hover { color: var(--text); background: var(--panel-2); }
+        .tab.active { color: #000; background: var(--white); font-weight: 600; }
+        .main { position: relative; z-index: 1; margin-left: 240px; padding: 50px 40px; flex: 1; width: calc(100% - 240px); }
+        .panelc {
+            max-width: 640px;
             display: none;
-            animation: slideIn 0.3s ease-out;
         }
-        .content-panel.active { display: block; }
-        @keyframes slideIn {
-            from { opacity: 0; transform: translateY(15px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        .content-panel h2 {
-            font-size: clamp(1.5em, 4vw, 2em);
-            margin-bottom: 20px;
-            color: #bb86fc;
-        }
-        .content-panel p {
-            line-height: 1.8;
-            color: #b5b5bc;
-            margin-bottom: 20px;
-            font-size: clamp(15px, 2vw, 16px);
-        }
-        .content-panel a {
-            color: #03dac6;
-            font-weight: 600;
-        }
+        .panelc.active { display: block; }
+        .panelc h2 { font-size: clamp(1.3em, 3.5vw, 1.6em); font-weight: 700; margin-bottom: 14px; letter-spacing: -0.3px; }
+        .panelc p { line-height: 1.8; color: var(--text-dim); margin-bottom: 14px; font-size: 14px; }
+        .panelc a { color: var(--accent); font-weight: 600; text-decoration: none; }
+        .panelc a:hover { text-decoration: underline; }
         .hamburger {
-            display: none;
-            position: fixed;
-            top: 20px;
-            left: 20px;
-            z-index: 20;
-            background: rgba(18,18,22,0.9);
-            border: 1px solid #232328;
-            color: #fff;
-            font-size: 24px;
-            padding: 8px 15px;
-            border-radius: 10px;
-            cursor: pointer;
+            display: none; position: fixed; top: 16px; left: 16px; z-index: 20;
+            background: var(--panel); border: 1px solid var(--border); color: var(--text);
+            font-size: 18px; padding: 6px 12px; border-radius: 7px; cursor: pointer;
         }
         @media (max-width: 768px) {
             body { flex-direction: column; }
-            .sidebar {
-                transform: translateX(-100%);
-                width: 260px;
-                padding-top: 60px;
-            }
+            .sidebar { transform: translateX(-100%); padding-top: 60px; }
             .sidebar.open { transform: translateX(0); }
             .hamburger { display: block; }
-            .main-content {
-                margin-left: 0;
-                width: 100%;
-                padding: 20px;
-                margin-top: 60px;
-            }
-            .sidebar a, .sidebar button { margin: 5px 0; }
+            .main { margin-left: 0; width: 100%; padding: 84px 22px 30px; }
         }
-        .overlay {
-            display: none;
-            position: fixed;
-            top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.6);
-            z-index: 4;
-        }
+        .overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 4; }
         .overlay.show { display: block; }
-        ${CLICK_RIPPLE_STYLE}
     </style>
 </head>
 <body>
-    <button class="hamburger" id="hamburger">&#9776;</button>
+    <button class="hamburger" id="hamburger">☰</button>
     <div class="overlay" id="overlay"></div>
     <div class="sidebar" id="sidebar">
-        <h2>Sttar</h2>
-        <button class="tab-btn active" data-tab="about">What is Sttar?</button>
-        <button class="tab-btn" data-tab="privacy">Privacy Policy</button>
-        <button class="tab-btn" data-tab="usage">How to Use</button>
-        <a href="/docs">API Docs (Locked)</a>
+        <div class="logo">Sttar<span> / docs</span></div>
+        <button class="tab active" data-tab="about">About</button>
+        <button class="tab" data-tab="privacy">Privacy</button>
+        <button class="tab" data-tab="usage">How to use</button>
+        <a href="/docs">API reference 🔒</a>
     </div>
-    <div class="main-content">
-        <div id="about" class="content-panel active">
-            <h2>What is Sttar Obfuscator?</h2>
-            <p>Sttar Obfuscator is a high-performance Lua code protection tool built for Roblox scripters. It transforms readable source code into a secure, obfuscated version that is extremely difficult to reverse-engineer, while keeping your scripts fully functional. Powered by the Prometheus engine with custom optimizations, Sttar delivers robust obfuscation without compromising execution speed.</p>
-            <p>Our mission is to give developers a free, easy-to-use layer of security for their intellectual property directly from the browser.</p>
+    <div class="main">
+        <div id="about" class="panelc active">
+            <h2>About Sttar</h2>
+            <p>Sttar is a Lua obfuscation tool built for Roblox scripters. Paste a script, pick a preset, and get back a transformed version that's far harder to reverse-engineer while staying fully functional.</p>
+            <p>It runs on the Prometheus engine with a few additional passes, and supports both Lua 5.1 and LuaU output.</p>
         </div>
-        <div id="privacy" class="content-panel">
-            <h2>Privacy Policy</h2>
-            <p>We do not store, log, or share any Lua code you submit. All processing is done in-memory and temporary files are deleted immediately after obfuscation. No personal data is collected. Your scripts remain yours alone.</p>
-            <p>For any questions, contact <a href="https://sttar-obfuscator.netlify.app" target="_blank">sttar-obfuscator.netlify.app</a>.</p>
+        <div id="privacy" class="panelc">
+            <h2>Privacy</h2>
+            <p>Code you submit is never stored or logged. Processing happens in memory; temp files are deleted immediately after each job completes. No accounts, no analytics on your scripts.</p>
+            <p>Questions: <a href="https://sttar-obfuscator.netlify.app" target="_blank">sttar-obfuscator.netlify.app</a></p>
         </div>
-        <div id="usage" class="content-panel">
-            <h2>How to Use</h2>
-            <p><strong>Step 1:</strong> Go to the <a href="/home">Obfuscator tool</a>.</p>
-            <p><strong>Step 2:</strong> Paste your Lua script into the text box.</p>
-            <p><strong>Step 3:</strong> Check the "I'm not a robot" checkbox, then click OBFUSCATE.</p>
-            <p><strong>Step 4:</strong> Copy the result, download as .lua, or SHARE to get a loadstring-ready link.</p>
-            <p>Need programmatic access? Use our <a href="/docs">API Docs</a> (password required).</p>
+        <div id="usage" class="panelc">
+            <h2>How to use</h2>
+            <p>1. Open the <a href="/home">obfuscator</a>.</p>
+            <p>2. Paste or upload a .lua file.</p>
+            <p>3. Choose a preset and Lua version.</p>
+            <p>4. Complete the human check, then click Obfuscate.</p>
+            <p>5. Copy, download, or share a loadstring link (Lua 5.1 only).</p>
         </div>
     </div>
     <script>
-        const btns = document.querySelectorAll('.tab-btn');
-        const panels = document.querySelectorAll('.content-panel');
-        btns.forEach(btn => {
-            btn.addEventListener('click', () => {
-                const tabId = btn.dataset.tab;
-                btns.forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
+        const tabs = document.querySelectorAll('.tab');
+        const panels = document.querySelectorAll('.panelc');
+        tabs.forEach(t => {
+            t.addEventListener('click', () => {
+                const id = t.dataset.tab;
+                tabs.forEach(x => x.classList.remove('active'));
+                t.classList.add('active');
                 panels.forEach(p => p.classList.remove('active'));
-                document.getElementById(tabId).classList.add('active');
+                document.getElementById(id).classList.add('active');
                 if (window.innerWidth <= 768) {
                     sidebar.classList.remove('open');
                     overlay.classList.remove('show');
@@ -989,7 +785,7 @@ app.get('/dashboard', (req, res) => {
             }
         });
 
-        ${CLICK_RIPPLE_SCRIPT}
+        ${CLICK_SCRIPT}
     </script>
 </body>
 </html>`);
@@ -1003,99 +799,39 @@ app.get('/docs', (req, res) => {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Obfuscator API – Login</title>
+    <title>Sttar — API Docs</title>
+    ${FONT_LINK}
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: #060608;
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 20px;
-            position: relative;
-            overflow-x: hidden;
+        ${BASE_STYLE}
+        body { display: flex; align-items: center; justify-content: center; padding: 20px; }
+        .card { width: 100%; max-width: 360px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 32px 28px; }
+        h2 { font-size: 1.3em; font-weight: 700; margin-bottom: 6px; }
+        .sub { color: var(--text-dim); font-size: 13px; margin-bottom: 22px; }
+        input[type="password"] {
+            width: 100%; padding: 11px 14px; border-radius: 8px;
+            background: var(--panel-2); color: var(--text); font-size: 14px;
+            margin-bottom: 14px; outline: none; border: 1px solid var(--border);
+            font-family: inherit;
         }
-        body::before {
-            content: "";
-            position: fixed;
-            top: 0; left: 0; width: 100%; height: 100%;
-            background: radial-gradient(circle at 30% 20%, rgba(138, 43, 226, 0.12), transparent 50%),
-                        radial-gradient(circle at 70% 80%, rgba(0, 255, 255, 0.07), transparent 50%);
-            pointer-events: none;
-            z-index: 0;
+        input[type="password"]:focus { border-color: var(--border-hover); }
+        button {
+            background: var(--white); border: 1px solid var(--white); color: #000; font-weight: 700;
+            padding: 11px 22px; border-radius: 8px; font-size: 13.5px; cursor: pointer;
+            width: 100%; font-family: inherit;
         }
-        .card {
-            position: relative;
-            z-index: 1;
-            background: rgba(18,18,22,0.82);
-            backdrop-filter: blur(15px);
-            border-radius: 20px;
-            padding: clamp(30px, 8vw, 40px);
-            width: 100%;
-            max-width: 380px;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.5);
-            border: 1px solid rgba(255,255,255,0.08);
-            text-align: center;
-            animation: fadeSlideUp 0.5s ease-out;
-        }
-        @keyframes fadeSlideUp {
-            from { opacity: 0; transform: translateY(15px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        .card h2 {
-            margin-bottom: 20px;
-            font-weight: 700;
-            font-size: clamp(1.5em, 5vw, 1.8em);
-            background: linear-gradient(135deg, #bb86fc, #03dac6);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-        .card input[type="password"] {
-            width: 100%;
-            padding: 14px 18px;
-            border-radius: 12px;
-            background: #0d0d10;
-            color: #e6e6ea;
-            font-size: 16px;
-            margin-bottom: 20px;
-            outline: none;
-            transition: 0.3s;
-            border: 1px solid #232328;
-        }
-        .card input[type="password"]:focus {
-            border-color: #bb86fc;
-            box-shadow: 0 0 0 3px rgba(187,134,252,0.25);
-        }
-        .card button {
-            background: linear-gradient(135deg, #bb86fc, #7c4dff);
-            border: none;
-            color: #fff;
-            font-weight: bold;
-            padding: 14px 30px;
-            border-radius: 12px;
-            font-size: 16px;
-            cursor: pointer;
-            width: 100%;
-        }
-        .card button:hover {
-            box-shadow: 0 10px 20px rgba(187,134,252,0.4);
-        }
-        .card p { color: #8a8a93; margin-top: 15px; font-size: 14px; }
-        ${CLICK_RIPPLE_STYLE}
+        button:hover { background: #d9d9d9; }
     </style>
 </head>
 <body>
     <div class="card">
-        <h2>Obfuscator API</h2>
-        <p style="color: #b5b5bc; margin-bottom: 20px;">Enter password to view docs</p>
+        <h2>API access</h2>
+        <p class="sub">Enter the password to view documentation.</p>
         <form method="POST" action="/docs">
             <input type="password" name="password" placeholder="Password" required>
-            <button type="submit">Enter</button>
+            <button type="submit">Continue</button>
         </form>
     </div>
-    <script>${CLICK_RIPPLE_SCRIPT}</script>
+    <script>${CLICK_SCRIPT}</script>
 </body>
 </html>`);
     }
@@ -1106,149 +842,68 @@ app.get('/docs', (req, res) => {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Obfuscator API – Documentation</title>
+    <title>Sttar — API Docs</title>
+    ${FONT_LINK}
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
-            background: #060608;
-            color: #e6e6ea;
-            line-height: 1.6;
-            padding: 20px;
-            position: relative;
-            overflow-x: hidden;
-        }
-        body::before {
-            content: "";
-            position: fixed;
-            top: 0; left: 0; width: 100%; height: 100%;
-            background: radial-gradient(circle at 80% 0%, rgba(138, 43, 226, 0.08), transparent 50%),
-                        radial-gradient(circle at 0% 100%, rgba(0, 255, 255, 0.05), transparent 50%);
-            pointer-events: none;
-            z-index: 0;
-        }
-        .container {
-            position: relative;
-            z-index: 1;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: clamp(20px, 5vw, 40px) 20px;
-        }
+        ${BASE_STYLE}
+        body { padding: 20px; }
+        .container { max-width: 740px; margin: 0 auto; padding: clamp(20px, 5vw, 48px) 16px; }
         .header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 20px;
-            margin-bottom: 40px;
-            border-bottom: 1px solid #232328;
-            padding-bottom: 20px;
+            display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;
+            gap: 16px; margin-bottom: 32px; border-bottom: 1px solid var(--border); padding-bottom: 18px;
         }
-        .header h1 {
-            font-size: clamp(1.8em, 5vw, 2.2em);
-            font-weight: 700;
-            background: linear-gradient(135deg, #bb86fc, #03dac6);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
+        .header h1 { font-size: clamp(1.4em, 4.5vw, 1.8em); font-weight: 700; letter-spacing: -0.4px; }
+        .logout {
+            background: transparent; border: 1px solid var(--border); color: var(--text-dim);
+            padding: 7px 16px; border-radius: 8px; text-decoration: none; font-size: 12.5px; font-weight: 600;
         }
-        .logout-btn {
-            background: rgba(255,255,255,0.08);
-            border: 1px solid #232328;
-            color: #b5b5bc;
-            padding: 8px 18px;
-            border-radius: 30px;
-            text-decoration: none;
-            font-size: 14px;
-        }
-        .logout-btn:hover {
-            background: rgba(187,134,252,0.15);
-            border-color: #bb86fc;
-            color: white;
-        }
+        .logout:hover { border-color: var(--danger); color: var(--danger); }
         .card {
-            background: rgba(18,18,22,0.78);
-            backdrop-filter: blur(15px);
-            border-radius: 16px;
-            padding: clamp(20px, 4vw, 30px);
-            margin-bottom: 30px;
-            border: 1px solid rgba(255,255,255,0.07);
-            box-shadow: 0 10px 25px -5px rgba(0,0,0,0.4);
-            animation: slideIn 0.4s ease-out;
+            background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+            padding: clamp(18px, 4vw, 26px); margin-bottom: 18px;
         }
-        @keyframes slideIn {
-            from { opacity: 0; transform: translateY(12px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        .card h2 {
-            font-size: 1.5em;
-            margin-bottom: 15px;
-            color: #bb86fc;
-        }
-        .code-block {
-            background: #0d0d10;
-            border: 1px solid #232328;
-            border-radius: 12px;
-            padding: 20px;
-            font-family: 'Fira Code', monospace;
-            font-size: clamp(13px, 2vw, 15px);
-            overflow-x: auto;
-            white-space: pre-wrap;
-            word-break: break-word;
-            margin: 15px 0;
-            color: #e6e6ea;
-        }
+        .card h2 { font-size: 1.05em; font-weight: 700; margin-bottom: 8px; }
         .method {
-            display: inline-block;
-            background: #bb86fc;
-            color: #0d0d10;
-            padding: 2px 10px;
-            border-radius: 20px;
-            font-weight: bold;
-            font-size: 13px;
-            margin-right: 10px;
+            display: inline-block; background: var(--panel-2); border: 1px solid var(--border);
+            color: var(--text-dim); padding: 2px 9px; border-radius: 5px; font-size: 11px; font-weight: 700; margin-right: 8px;
         }
-        .endpoint {
-            font-size: 1.1em;
-            font-weight: 600;
-            color: #f8fafc;
+        .card .desc { color: var(--text-dim); font-size: 13px; margin: 8px 0 12px; }
+        .code-block {
+            background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+            padding: 16px; font-size: 12.5px; overflow-x: auto; white-space: pre-wrap;
+            word-break: break-word; color: var(--text); font-family: 'Menlo', 'Consolas', monospace;
         }
         .note {
-            background: rgba(255,255,255,0.04);
-            border-left: 4px solid #03dac6;
-            padding: 15px;
-            border-radius: 8px;
-            margin-top: 25px;
-            color: #e6e6ea;
-            font-size: 14px;
+            background: var(--panel); border: 1px solid var(--border);
+            padding: 14px 16px; border-radius: 10px; color: var(--text-dim); font-size: 13px;
         }
-        @media (max-width: 600px) {
-            .container { padding: 20px 10px; }
-        }
-        ${CLICK_RIPPLE_STYLE}
+        .note b { color: var(--text); }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>Obfuscator API Documentation</h1>
-            <a href="/logout" class="logout-btn">Logout</a>
+            <h1>API reference</h1>
+            <a href="/logout" class="logout">Log out</a>
         </div>
         <div class="card">
-            <h2>POST /api/obfuscate</h2>
-            <p><span class="method">POST</span><span class="endpoint">/api/obfuscate</span></p>
-            <p style="color: #8a8a93;">Obfuscate Lua code. Requires reCAPTCHA v2 token.</p>
-            <div class="code-block">{ "code": "...", "recaptchaToken": "..." }</div>
+            <h2><span class="method">POST</span>/api/obfuscate</h2>
+            <p class="desc">Obfuscates Lua source. Requires a reCAPTCHA v2 token. Optional preset and luaVersion fields.</p>
+            <div class="code-block">{
+  "code": "...",
+  "recaptchaToken": "...",
+  "preset": "Minify | Weak | Medium | Strong",
+  "luaVersion": "lua51 | luau"
+}</div>
         </div>
         <div class="card">
-            <h2>POST /api/share</h2>
-            <p>Upload obfuscated code and get a loadstring-ready share link.</p>
+            <h2><span class="method">POST</span>/api/share</h2>
+            <p class="desc">Uploads obfuscated output and returns a loadstring-ready link.</p>
             <div class="code-block">{ "code": "obfuscated code..." }</div>
         </div>
-        <div class="note">
-            <strong>Note:</strong> /raw/:id redirects to permanent Supabase storage.
-        </div>
+        <div class="note"><b>Note:</b> /raw/:id redirects to permanent Supabase storage.</div>
     </div>
-    <script>${CLICK_RIPPLE_SCRIPT}</script>
+    <script>${CLICK_SCRIPT}</script>
 </body>
 </html>`);
 });
@@ -1264,44 +919,22 @@ app.post('/docs', (req, res) => {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Wrong Password</title>
+    <title>Sttar — Access denied</title>
+    ${FONT_LINK}
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            background: #060608;
-            color: #e6e6ea;
-            font-family: 'Segoe UI', sans-serif;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            height: 100vh;
-            text-align: center;
-            padding: 20px;
-            position: relative;
-            overflow-x: hidden;
-        }
-        body::before {
-            content: "";
-            position: fixed;
-            top: 0; left: 0; width: 100%; height: 100%;
-            background: radial-gradient(circle at 30% 20%, rgba(248, 113, 113, 0.08), transparent 50%),
-                        radial-gradient(circle at 70% 80%, rgba(0, 255, 255, 0.05), transparent 50%);
-            pointer-events: none;
-            z-index: 0;
-        }
-        h2 { color: #f87171; font-size: clamp(1.5em, 5vw, 2em); position: relative; z-index: 1; }
-        p { color: #8a8a93; margin-top: 10px; position: relative; z-index: 1; }
-        a { color: #bb86fc; text-decoration: none; margin-top: 20px; position: relative; z-index: 1; }
-        a:hover { text-decoration: underline; }
-        ${CLICK_RIPPLE_STYLE}
+        ${BASE_STYLE}
+        body { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; text-align: center; padding: 20px; }
+        h2 { color: var(--danger); font-size: clamp(1.3em, 5vw, 1.7em); font-weight: 700; }
+        p { color: var(--text-dim); margin-top: 8px; font-size: 13px; }
+        a { color: var(--text); text-decoration: none; margin-top: 18px; display: inline-block; font-size: 13px; border-bottom: 1px solid var(--border); }
+        a:hover { border-color: var(--text); }
     </style>
 </head>
 <body>
     <h2>Wrong password</h2>
-    <p>Please try again.</p>
-    <a href="/docs">Back to Login</a>
-    <script>${CLICK_RIPPLE_SCRIPT}</script>
+    <p>That key didn't match. Try again.</p>
+    <a href="/docs">Back to login</a>
+    <script>${CLICK_SCRIPT}</script>
 </body>
 </html>`);
 });
