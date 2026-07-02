@@ -372,378 +372,544 @@ app.get('/home', (req, res) => {
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/lua/lua.min.js"></script>
     <style>
         ${BASE_STYLE}
-        body { display: flex; flex-direction: column; align-items: center; padding: 0 16px 60px; }
+
+        /* ── layout ── */
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 0 16px 60px;
+            min-height: 100vh;
+        }
         .nav {
-            width: 100%; max-width: 760px;
-            display: flex; justify-content: space-between; align-items: center;
+            width: 100%;
+            max-width: 760px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
             padding: 22px 0;
+            position: relative;
+            z-index: 5;
         }
         .logo { font-weight: 800; font-size: 14px; letter-spacing: -0.2px; }
         .logo span { color: var(--text-dim); font-weight: 500; }
-        .nav-actions { display: flex; gap: 8px; align-items: center; position: relative; }
-        .icon-btn {
-            font-size: 13px; color: var(--text-dim); text-decoration: none;
-            border: 1px solid var(--border); padding: 7px 12px; border-radius: 7px;
-            background: transparent; font-family: inherit; cursor: pointer;
+        .menu-btn {
+            font-size: 13px; color: var(--text-dim);
+            border: 1px solid var(--border); padding: 7px 14px;
+            border-radius: 7px; background: transparent;
+            font-family: inherit; cursor: pointer; font-weight: 600;
         }
-        .icon-btn:hover { color: var(--text); border-color: var(--border-hover); }
+        .menu-btn:hover { color: var(--text); border-color: var(--border-hover); }
 
-        .hero { width: 100%; max-width: 760px; margin: 18px 0 28px; }
-        .hero h1 { font-size: clamp(1.6em, 4.5vw, 2.1em); font-weight: 700; letter-spacing: -0.5px; margin-bottom: 8px; }
-        .hero p { color: var(--text-dim); font-size: 14.5px; }
-        .panel {
-            width: 100%; max-width: 760px;
+        /* ── 3D scene ── */
+        .scene {
+            width: 100%;
+            max-width: 760px;
+            perspective: 1400px;
+        }
+        .flipcard {
+            width: 100%;
+            position: relative;
+            transform-style: preserve-3d;
+            transition: transform 0.72s cubic-bezier(.4,0,.2,1);
+            /* height is driven by the taller of front/back */
+        }
+        .flipcard.flipped { transform: rotateY(180deg); }
+
+        .flipcard-front,
+        .flipcard-back {
+            width: 100%;
+            backface-visibility: hidden;
+            -webkit-backface-visibility: hidden;
             background: var(--panel);
             border: 1px solid var(--border);
             border-radius: 14px;
             padding: clamp(18px, 4vw, 28px);
         }
-        .section-label {
-            font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.6px;
-            color: var(--text-dim); margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center;
+        .flipcard-front { position: relative; }
+        .flipcard-back {
+            position: absolute;
+            top: 0; left: 0;
+            transform: rotateY(180deg);
+            min-height: 100%;
         }
-        .upload-link { color: var(--text-dim); font-weight: 500; text-transform: none; letter-spacing: 0; cursor: pointer; font-size: 12.5px; }
+        /* when flipped, back needs to be in flow so page height adjusts */
+        .flipcard.flipped .flipcard-front  { visibility: hidden; }
+        .flipcard.flipped .flipcard-back   { position: relative; }
+
+        /* ── shared label style ── */
+        .section-label {
+            font-size: 11.5px; font-weight: 600;
+            text-transform: uppercase; letter-spacing: 0.6px;
+            color: var(--text-dim); margin-bottom: 10px;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .upload-link {
+            color: var(--text-dim); font-weight: 500;
+            text-transform: none; letter-spacing: 0;
+            cursor: pointer; font-size: 12.5px;
+        }
         .upload-link:hover { color: var(--text); }
 
+        /* ── CodeMirror ── */
         .editor-wrap {
             border: 1px solid var(--border);
             border-radius: 10px;
             overflow: hidden;
         }
         .editor-wrap:focus-within { border-color: var(--border-hover); }
-        .CodeMirror { height: auto; min-height: 190px; max-height: 50vh; font-family: 'Menlo','Consolas',monospace; font-size: 13px; }
+        .CodeMirror {
+            height: auto;
+            min-height: 200px;
+            max-height: 55vh;
+            font-family: 'Menlo','Consolas',monospace;
+            font-size: 13px;
+        }
         .cm-s-sttar.CodeMirror { background: var(--panel-2); color: var(--text); }
         .cm-s-sttar .CodeMirror-gutters { background: var(--panel-2); border-right: 1px solid var(--border); }
         .cm-s-sttar .CodeMirror-linenumber { color: var(--text-dimmer); }
-        .cm-s-sttar .cm-keyword { color: var(--accent-user, #5e9eff); font-weight: 600; }
-        .cm-s-sttar .cm-string { color: #2dd4bf; }
-        .cm-s-sttar .cm-comment { color: var(--text-dimmer); font-style: italic; }
-        .cm-s-sttar .cm-number { color: #ffb000; }
-        .cm-s-sttar .cm-variable, .cm-s-sttar .cm-def { color: var(--text); }
+        .cm-s-sttar .cm-keyword  { color: #5e9eff; font-weight: 600; }
+        .cm-s-sttar .cm-string   { color: #2dd4bf; }
+        .cm-s-sttar .cm-comment  { color: var(--text-dimmer); font-style: italic; }
+        .cm-s-sttar .cm-number   { color: #ffb000; }
+        .cm-s-sttar .cm-variable,.cm-s-sttar .cm-def { color: var(--text); }
         .cm-s-sttar .cm-operator { color: var(--text-dim); }
         .cm-s-sttar .CodeMirror-cursor { border-left: 1px solid var(--text); }
         .cm-s-sttar div.CodeMirror-selected { background: rgba(255,255,255,0.1); }
         .CodeMirror-placeholder { color: var(--text-dimmer) !important; }
 
-        .meta { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 6px; color: var(--text-dimmer); font-size: 11.5px; margin-top: 8px; }
+        /* ── meta row ── */
+        .meta {
+            display: flex; justify-content: space-between;
+            flex-wrap: wrap; gap: 6px;
+            color: var(--text-dimmer); font-size: 11.5px; margin-top: 8px;
+        }
 
-        .controls { margin-top: 22px; display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+        /* ── pill controls ── */
+        .controls {
+            margin-top: 22px;
+            display: grid; grid-template-columns: 1fr 1fr; gap: 18px;
+        }
         @media (max-width: 560px) { .controls { grid-template-columns: 1fr; } }
         .pill-group {
-            display: flex; gap: 4px; background: var(--panel-2);
-            border: 1px solid var(--border); border-radius: 9px; padding: 4px;
+            display: flex; gap: 4px;
+            background: var(--panel-2);
+            border: 1px solid var(--border);
+            border-radius: 9px; padding: 4px;
         }
         .pill {
             flex: 1; text-align: center;
-            background: transparent; border: none; color: var(--text-dim);
-            font-family: inherit; font-size: 12.5px; font-weight: 600;
+            background: transparent; border: none;
+            color: var(--text-dim); font-family: inherit;
+            font-size: 12.5px; font-weight: 600;
             padding: 8px 6px; border-radius: 6px; cursor: pointer;
         }
-        .pill.active { background: var(--accent-user, #ffffff); color: var(--accent-text, #000000); }
+        .pill.active  { background: #fff; color: #000; }
         .pill:not(.active):hover { color: var(--text); }
-        .hint { font-size: 11.5px; color: var(--text-dimmer); margin-top: 7px; }
+        .hint {
+            font-size: 11.5px; color: var(--text-dimmer);
+            margin-top: 7px; min-height: 16px;
+        }
 
+        /* ── action buttons ── */
         .captcha-row { display: flex; justify-content: center; margin: 24px 0 4px; }
         .actions { display: flex; gap: 10px; margin-top: 18px; flex-wrap: wrap; }
         button {
             font-family: 'Inter', sans-serif;
-            padding: 11px 18px;
-            border-radius: 9px;
-            font-weight: 600;
-            font-size: 13.5px;
-            cursor: pointer;
-            border: 1px solid var(--border);
-            background: transparent;
-            color: var(--text-dim);
+            padding: 11px 18px; border-radius: 9px;
+            font-weight: 600; font-size: 13.5px;
+            cursor: pointer; border: 1px solid var(--border);
+            background: transparent; color: var(--text-dim);
         }
         button:hover { border-color: var(--border-hover); color: var(--text); }
         #runBtn {
-            flex: 1;
-            background: var(--accent-user, #ffffff);
-            color: var(--accent-text, #000000);
-            border-color: var(--accent-user, #ffffff);
+            flex: 1; background: #fff; color: #000; border-color: #fff;
         }
-        #runBtn:hover { filter: brightness(0.88); }
-        #runBtn:disabled { opacity: 0.35; cursor: not-allowed; filter: none; background: var(--text-dim); border-color: var(--text-dim); color: #000; }
-        #shareBtn { border-color: var(--accent-user, #5e9eff); color: var(--accent-user, #5e9eff); display: none; }
-        #shareBtn:hover { background: rgba(255,255,255,0.06); }
+        #runBtn:hover { background: #d9d9d9; }
+        #runBtn:disabled {
+            opacity: 0.35; cursor: not-allowed;
+            background: var(--text-dim); border-color: var(--text-dim); color: #000;
+        }
 
-        .loading { display: none; align-items: center; gap: 10px; margin-top: 20px; color: var(--text-dim); font-size: 13px; }
-        .spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--border); border-top-color: var(--text); animation: spin 0.7s linear infinite; }
+        /* ── loading ── */
+        .loading {
+            display: none; align-items: center;
+            gap: 10px; margin-top: 20px;
+            color: var(--text-dim); font-size: 13px;
+        }
+        .spin {
+            width: 14px; height: 14px; border-radius: 50%;
+            border: 2px solid var(--border);
+            border-top-color: var(--text);
+            animation: spin 0.7s linear infinite; flex-shrink: 0;
+        }
         @keyframes spin { to { transform: rotate(360deg); } }
 
+        /* ── result ── */
         .result { display: none; margin-top: 26px; }
-        .result-bar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+        .result-bar {
+            display: flex; justify-content: space-between;
+            align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 10px;
+        }
         .result-bar h3 { font-size: 13px; font-weight: 600; color: var(--text); }
         .actbtns { display: flex; gap: 8px; flex-wrap: wrap; }
         .actbtns button, .actbtns a.btn {
             border: 1px solid var(--border); color: var(--text-dim);
             background: transparent; padding: 7px 14px; border-radius: 7px;
-            font-size: 12px; text-decoration: none; cursor: pointer; font-family: inherit; font-weight: 600;
+            font-size: 12px; text-decoration: none; cursor: pointer;
+            font-family: inherit; font-weight: 600;
         }
-        .actbtns button:hover, .actbtns a.btn:hover { border-color: var(--border-hover); color: var(--text); }
+        .actbtns button:hover, .actbtns a.btn:hover {
+            border-color: var(--border-hover); color: var(--text);
+        }
+        .share-actions {
+            display: none; gap: 8px; flex-wrap: wrap; margin-top: 10px;
+        }
+        .share-actions button {
+            border: 1px solid var(--accent); color: var(--accent);
+            background: transparent; padding: 8px 14px; border-radius: 7px;
+            font-size: 12px; cursor: pointer; font-family: inherit; font-weight: 600;
+        }
+        .share-actions button:hover { background: rgba(94,158,255,0.1); }
+        .share-actions .share-trigger {
+            border-color: var(--border); color: var(--text-dim);
+        }
+        .share-actions .share-trigger:hover { border-color: var(--border-hover); color: var(--text); }
         pre {
             background: var(--panel-2);
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            padding: 18px;
-            font-size: 12.5px;
-            overflow-x: auto;
-            white-space: pre-wrap;
-            word-break: break-word;
-            max-height: 380px;
-            color: var(--text);
-            line-height: 1.55;
-            font-family: 'Menlo', 'Consolas', monospace;
+            border: 1px solid var(--border); border-radius: 10px;
+            padding: 18px; font-size: 12.5px;
+            overflow-x: auto; white-space: pre-wrap;
+            word-break: break-word; max-height: 380px;
+            color: var(--text); line-height: 1.55;
+            font-family: 'Menlo','Consolas',monospace;
         }
         #errDetail { color: var(--danger); margin-top: 10px; display: none; font-size: 12.5px; }
+
+        /* ── BACK PANEL ── */
+        .back-header {
+            display: flex; align-items: center; justify-content: space-between;
+            margin-bottom: 18px;
+        }
+        .back-title { font-size: 13px; font-weight: 700; color: var(--text); }
+        .back-btn {
+            font-size: 12.5px; color: var(--text-dim);
+            border: 1px solid var(--border); padding: 6px 12px;
+            border-radius: 7px; background: transparent;
+            cursor: pointer; font-family: inherit; font-weight: 600;
+        }
+        .back-btn:hover { border-color: var(--border-hover); color: var(--text); }
+        /* horizontal tab pills */
+        .back-tabs {
+            display: flex; gap: 4px; overflow-x: auto;
+            padding-bottom: 4px; margin-bottom: 18px;
+            scrollbar-width: none;
+        }
+        .back-tabs::-webkit-scrollbar { display: none; }
+        .btab {
+            flex-shrink: 0; background: transparent;
+            border: 1px solid var(--border); color: var(--text-dim);
+            font-family: inherit; font-size: 12px; font-weight: 600;
+            padding: 7px 14px; border-radius: 20px; cursor: pointer;
+        }
+        .btab.active { background: #fff; color: #000; border-color: #fff; }
+        .btab:not(.active):hover { border-color: var(--border-hover); color: var(--text); }
+        /* horizontal slider viewport */
+        .back-viewport {
+            overflow: hidden;
+            position: relative;
+        }
+        .back-slider {
+            display: flex;
+            transition: transform 0.38s cubic-bezier(.4,0,.2,1);
+            will-change: transform;
+        }
+        .bpanel {
+            flex: 0 0 100%;
+            min-width: 0;
+            padding-right: 2px; /* avoid clip on right border radius */
+        }
+        .bpanel h3 { font-size: 14px; font-weight: 700; margin-bottom: 10px; }
+        .bpanel p  { color: var(--text-dim); font-size: 13.5px; line-height: 1.75; margin-bottom: 10px; }
+        .bpanel a  { color: var(--accent); font-weight: 600; text-decoration: none; }
+        .bpanel a:hover { text-decoration: underline; }
+
+        /* key box */
+        .key-box {
+            background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+            padding: 12px; font-size: 11.5px; word-break: break-all;
+            font-family: 'Menlo','Consolas',monospace; color: var(--text); margin: 10px 0;
+            display: none;
+        }
+        .key-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+        /* history items */
+        .hist-item {
+            border: 1px solid var(--border); border-radius: 8px;
+            padding: 10px 12px; margin-bottom: 8px; cursor: pointer;
+        }
+        .hist-item:hover { border-color: var(--border-hover); }
+        .hist-item .hi-top {
+            display: flex; justify-content: space-between;
+            font-weight: 600; font-size: 12px; color: var(--text); margin-bottom: 3px;
+        }
+        .hist-item .hi-preview { font-size: 11.5px; color: var(--text-dim); }
+        .empty-hist { color: var(--text-dimmer); font-size: 12.5px; }
+
+        /* ── toast ── */
         .toast {
             visibility: hidden;
             position: fixed; bottom: 26px; left: 50%; transform: translateX(-50%);
-            background: var(--panel); color: var(--text); border: 1px solid var(--border);
-            padding: 10px 20px; border-radius: 9px; font-size: 12.5px;
-            z-index: 999; white-space: nowrap;
+            background: var(--panel); color: var(--text);
+            border: 1px solid var(--border);
+            padding: 10px 20px; border-radius: 9px;
+            font-size: 12.5px; z-index: 999; white-space: nowrap;
         }
         .toast.show { visibility: visible; animation: fadeInOut 2s ease; }
         @keyframes fadeInOut {
-            0% { opacity: 0; bottom: 16px; } 10% { opacity: 1; bottom: 26px; }
-            90% { opacity: 1; bottom: 26px; } 100% { opacity: 0; bottom: 16px; }
+            0%  { opacity: 0; bottom: 16px; }
+            10% { opacity: 1; bottom: 26px; }
+            90% { opacity: 1; bottom: 26px; }
+            100%{ opacity: 0; bottom: 16px; }
         }
-
-        /* ---------- accent popover ---------- */
-        .accent-pop {
-            position: absolute; top: calc(100% + 8px); right: 36px;
-            background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
-            padding: 14px; width: 200px; display: none; z-index: 50;
-            box-shadow: 0 12px 30px rgba(0,0,0,0.5);
-        }
-        .accent-pop.open { display: block; }
-        .accent-pop .swrow { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
-        .swatch { width: 24px; height: 24px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; }
-        .swatch.selected { border-color: var(--text); }
-        .accent-pop input[type="color"] {
-            width: 100%; height: 32px; border: 1px solid var(--border); border-radius: 6px;
-            background: var(--panel-2); cursor: pointer; padding: 2px;
-        }
-
-        /* ---------- drawer ---------- */
-        .overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 30; }
-        .overlay.show { display: block; }
-        .drawer {
-            position: fixed; top: 0; right: 0; bottom: 0; width: min(340px, 86vw);
-            background: var(--panel); border-left: 1px solid var(--border);
-            z-index: 31; transform: translateX(100%); transition: transform 0.25s ease;
-            display: flex; flex-direction: column;
-        }
-        .drawer.open { transform: translateX(0); }
-        .drawer-head { display: flex; justify-content: space-between; align-items: center; padding: 18px; border-bottom: 1px solid var(--border); }
-        .drawer-head .logo { font-size: 13px; }
-        .drawer-close { background: none; border: 1px solid var(--border); color: var(--text-dim); border-radius: 6px; width: 30px; height: 30px; cursor: pointer; }
-        .drawer-tabs { display: flex; gap: 4px; padding: 12px 14px 0; flex-wrap: wrap; }
-        .dtab {
-            background: none; border: 1px solid var(--border); color: var(--text-dim);
-            font-family: inherit; font-size: 11.5px; font-weight: 600; padding: 6px 10px;
-            border-radius: 20px; cursor: pointer;
-        }
-        .dtab.active { background: var(--accent-user, #ffffff); color: var(--accent-text, #000); border-color: var(--accent-user, #ffffff); }
-        .drawer-body { padding: 16px 18px; overflow-y: auto; flex: 1; }
-        .dpanel { display: none; }
-        .dpanel.active { display: block; }
-        .dpanel h3 { font-size: 14px; font-weight: 700; margin-bottom: 10px; }
-        .dpanel p { color: var(--text-dim); font-size: 13px; line-height: 1.7; margin-bottom: 10px; }
-        .dpanel a { color: var(--accent-user, #5e9eff); font-weight: 600; text-decoration: none; }
-        .dpanel a:hover { text-decoration: underline; }
-        .key-box {
-            background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
-            padding: 12px; font-size: 11.5px; word-break: break-all; font-family: 'Menlo','Consolas',monospace;
-            color: var(--text); margin: 10px 0;
-        }
-        .hist-item {
-            border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px;
-            cursor: pointer; font-size: 12px; color: var(--text-dim);
-        }
-        .hist-item:hover { border-color: var(--border-hover); color: var(--text); }
-        .hist-item .hi-top { display: flex; justify-content: space-between; font-weight: 600; color: var(--text); margin-bottom: 3px; }
-        .empty-state { color: var(--text-dimmer); font-size: 12.5px; }
 
         @media (max-width: 560px) {
             .actbtns { flex-direction: column; width: 100%; }
             .actbtns button, .actbtns a.btn { text-align: center; }
-            .accent-pop { right: 8px; }
+            .share-actions { flex-direction: column; }
+            .share-actions button { text-align: center; }
         }
     </style>
 </head>
 <body>
     <div class="nav">
         <div class="logo">Sttar<span> / obfuscator</span></div>
-        <div class="nav-actions">
-            <button class="icon-btn" id="accentBtn" type="button">Accent</button>
-            <div class="accent-pop" id="accentPop">
-                <div class="swrow" id="swatchRow"></div>
-                <input type="color" id="customColor" value="#ffffff">
-            </div>
-            <button class="icon-btn" id="menuBtn" type="button">Menu</button>
-        </div>
+        <button class="menu-btn" id="menuBtn">Menu</button>
     </div>
-    <div class="hero">
-        <h1>Obfuscate your Lua scripts</h1>
-        <p>Paste code, pick a preset, verify you're human, and run.</p>
-    </div>
-    <div class="panel">
-        <div class="section-label">
-            <span>Source</span>
-            <span class="upload-link" id="uploadLink">Upload .lua file</span>
-            <input type="file" id="fileUpload" accept=".lua" style="display:none">
-        </div>
-        <div class="editor-wrap">
-            <textarea id="luaInput" style="display:none;"></textarea>
-        </div>
-        <div class="meta">
-            <span id="counter">0 lines · 0 chars</span>
-            <span id="estimate">Est. output: ~0 chars</span>
-        </div>
 
-        <div class="controls">
-            <div>
-                <div class="section-label">Obfuscation preset</div>
-                <div class="pill-group" id="presetGroup">
-                    <button type="button" class="pill" data-value="Minify">Minify</button>
-                    <button type="button" class="pill" data-value="Weak">Weak</button>
-                    <button type="button" class="pill active" data-value="Medium">Medium</button>
-                    <button type="button" class="pill" data-value="Strong">Strong</button>
+    <div class="scene">
+        <div class="flipcard" id="flipcard">
+
+            <!-- ══════════ FRONT ══════════ -->
+            <div class="flipcard-front">
+                <div class="section-label">
+                    <span>Source</span>
+                    <span class="upload-link" id="uploadLink">Upload .lua file</span>
+                    <input type="file" id="fileUpload" accept=".lua" style="display:none">
+                </div>
+                <div class="editor-wrap">
+                    <textarea id="luaInput" style="display:none"></textarea>
+                </div>
+                <div class="meta">
+                    <span id="counter">0 lines · 0 chars</span>
+                    <span style="color:var(--text-dimmer)">Ctrl + Enter to run</span>
+                </div>
+
+                <div class="controls">
+                    <div>
+                        <div class="section-label">Preset</div>
+                        <div class="pill-group" id="presetGroup">
+                            <button type="button" class="pill" data-value="Minify">Minify</button>
+                            <button type="button" class="pill" data-value="Weak">Weak</button>
+                            <button type="button" class="pill active" data-value="Medium">Medium</button>
+                            <button type="button" class="pill" data-value="Strong">Strong</button>
+                        </div>
+                        <div class="hint" id="presetHint">Balanced protection and output size.</div>
+                    </div>
+                    <div>
+                        <div class="section-label">Lua version</div>
+                        <div class="pill-group" id="luaVersionGroup">
+                            <button type="button" class="pill active" data-value="lua51">Lua 5.1</button>
+                            <button type="button" class="pill" data-value="luau">LuaU</button>
+                        </div>
+                        <div class="hint" id="luauHint" style="min-height:16px">
+                            Lua 5.1 — standard. Supports Share link.
+                        </div>
+                    </div>
+                </div>
+
+                <div class="captcha-row">
+                    <div class="g-recaptcha"
+                         data-sitekey="${RECAPTCHA_SITE_KEY}"
+                         data-callback="onCaptchaSuccess"
+                         data-expired-callback="onCaptchaExpired"></div>
+                </div>
+
+                <div class="actions">
+                    <button id="sampleBtn" type="button">Load sample</button>
+                    <button id="clearBtn" type="button">Clear</button>
+                    <button id="runBtn" type="button" disabled>Obfuscate</button>
+                </div>
+
+                <div class="loading" id="loading">
+                    <div class="spin"></div>
+                    <span>Obfuscating…</span>
+                </div>
+
+                <div class="result" id="resultSection">
+                    <div class="result-bar">
+                        <h3>Output</h3>
+                        <div class="actbtns">
+                            <button id="copyBtn" type="button">Copy</button>
+                            <a id="downloadLink" class="btn" href="#" download="">Download .lua</a>
+                        </div>
+                    </div>
+                    <pre id="resultCode"></pre>
+                    <div id="errDetail"></div>
+                    <div class="share-actions" id="shareActions">
+                        <button class="share-trigger" id="shareBtn" type="button">Share</button>
+                        <button id="copyLoaderBtn" type="button" style="display:none">Copy loadstring</button>
+                        <button id="copyUrlBtn"    type="button" style="display:none">Copy URL</button>
+                    </div>
                 </div>
             </div>
-            <div>
-                <div class="section-label">Lua version</div>
-                <div class="pill-group" id="luaVersionGroup">
-                    <button type="button" class="pill active" data-value="lua51">Lua 5.1</button>
-                    <button type="button" class="pill" data-value="luau">LuaU</button>
+            <!-- ══════════ END FRONT ══════════ -->
+
+            <!-- ══════════ BACK ══════════ -->
+            <div class="flipcard-back">
+                <div class="back-header">
+                    <span class="back-title">Menu</span>
+                    <button class="back-btn" id="backBtn">← Back</button>
                 </div>
-                <div class="hint" id="luauHint" style="display:none;">LuaU output disables the loadstring Share link.</div>
-            </div>
-        </div>
-
-        <div class="captcha-row">
-            <div class="g-recaptcha" data-sitekey="${RECAPTCHA_SITE_KEY}" data-callback="onCaptchaSuccess" data-expired-callback="onCaptchaExpired"></div>
-        </div>
-
-        <div class="actions">
-            <button id="sampleBtn" type="button">Load sample</button>
-            <button id="clearBtn" type="button">Clear</button>
-            <button id="runBtn" type="button" disabled>Obfuscate</button>
-        </div>
-
-        <div class="loading" id="loading"><div class="spin"></div><span>Obfuscating…</span></div>
-
-        <div class="result" id="resultSection">
-            <div class="result-bar">
-                <h3>Output</h3>
-                <div class="actbtns">
-                    <button id="copyBtn" type="button">Copy</button>
-                    <a id="downloadLink" class="btn" href="#" download="">Download .lua</a>
-                    <button id="shareBtn" type="button">Share loader</button>
+                <div class="back-tabs" id="backTabs">
+                    <button class="btab active" data-idx="0">About</button>
+                    <button class="btab" data-idx="1">Usage</button>
+                    <button class="btab" data-idx="2">Privacy</button>
+                    <button class="btab" data-idx="3">API Key</button>
+                    <button class="btab" data-idx="4">History</button>
                 </div>
+                <div class="back-viewport">
+                    <div class="back-slider" id="backSlider">
+
+                        <div class="bpanel">
+                            <h3>About Sttar</h3>
+                            <p>Sttar is a Lua obfuscation tool built for Roblox scripters. Paste a script, pick a preset, and get back a transformed output that's far harder to reverse-engineer while staying fully functional.</p>
+                            <p>Runs on the Prometheus engine with extra passes on top. Supports both Lua 5.1 and LuaU.</p>
+                            <p><a href="/docs">API reference 🔒</a></p>
+                        </div>
+
+                        <div class="bpanel">
+                            <h3>How to use</h3>
+                            <p>1. Paste or upload a .lua file into the editor.</p>
+                            <p>2. Choose a preset — Minify just compresses, Weak adds basic obfuscation, Medium is the safe default, Strong is maximum but slower.</p>
+                            <p>3. Pick Lua version. LuaU disables the Share link.</p>
+                            <p>4. Complete the human check then hit Obfuscate, or press Ctrl + Enter.</p>
+                            <p>5. Copy output, download it, or Share to get a loadstring URL (Lua 5.1 only).</p>
+                        </div>
+
+                        <div class="bpanel">
+                            <h3>Privacy</h3>
+                            <p>Nothing you paste is stored or logged server-side. Processing happens in memory; temp files are deleted right after each job.</p>
+                            <p>Your last 5 obfuscations are saved in your own browser localStorage only for the History tab — nothing goes to the server for that.</p>
+                            <p><a href="https://sttar-obfuscator.netlify.app" target="_blank">sttar-obfuscator.netlify.app</a></p>
+                        </div>
+
+                        <div class="bpanel">
+                            <h3>Free API key</h3>
+                            <p>Get a personal key to raise your rate limit from 5 to 30 requests/min on <code style="font-family:monospace;font-size:12px">/api/obfuscate</code>. Free, no signup needed. Key is saved in this browser.</p>
+                            <div class="key-box" id="keyDisplay"></div>
+                            <div class="key-actions">
+                                <button id="genKeyBtn" type="button">Generate key</button>
+                                <button id="copyKeyBtn" type="button" style="display:none">Copy key</button>
+                            </div>
+                        </div>
+
+                        <div class="bpanel">
+                            <h3>History <span style="color:var(--text-dimmer);font-weight:400;font-size:12px">(last 5, this browser)</span></h3>
+                            <div id="historyList"></div>
+                        </div>
+
+                    </div><!-- /back-slider -->
+                </div><!-- /back-viewport -->
             </div>
-            <pre id="resultCode"></pre>
-            <div id="errDetail"></div>
-        </div>
-    </div>
+            <!-- ══════════ END BACK ══════════ -->
+
+        </div><!-- /flipcard -->
+    </div><!-- /scene -->
+
     <div class="toast" id="toast"></div>
 
-    <div class="overlay" id="overlay"></div>
-    <div class="drawer" id="drawer">
-        <div class="drawer-head">
-            <div class="logo">Sttar<span> / menu</span></div>
-            <button class="drawer-close" id="drawerClose">✕</button>
-        </div>
-        <div class="drawer-tabs">
-            <button class="dtab active" data-dtab="about">About</button>
-            <button class="dtab" data-dtab="privacy">Privacy</button>
-            <button class="dtab" data-dtab="usage">Usage</button>
-            <button class="dtab" data-dtab="apikey">API Key</button>
-            <button class="dtab" data-dtab="history">History</button>
-        </div>
-        <div class="drawer-body">
-            <div id="d-about" class="dpanel active">
-                <h3>About Sttar</h3>
-                <p>Sttar is a Lua obfuscation tool built for Roblox scripters. Paste a script, pick a preset, and get back a transformed version that's far harder to reverse-engineer while staying fully functional.</p>
-                <p>Runs on the Prometheus engine with extra passes layered on top. Supports Lua 5.1 and LuaU output.</p>
-                <p><a href="/docs">API reference 🔒</a></p>
-            </div>
-            <div id="d-privacy" class="dpanel">
-                <h3>Privacy</h3>
-                <p>Code you submit is never stored or logged server-side. Processing happens in memory; temp files are deleted right after each job.</p>
-                <p>Your preset, version, and the last 5 results you generate are saved only in your own browser (localStorage) for the History tab below — nothing leaves your device for that.</p>
-                <p>Questions: <a href="https://sttar-obfuscator.netlify.app" target="_blank">sttar-obfuscator.netlify.app</a></p>
-            </div>
-            <div id="d-usage" class="dpanel">
-                <h3>How to use</h3>
-                <p>1. Paste or upload a .lua file.</p>
-                <p>2. Choose a preset and Lua version.</p>
-                <p>3. Complete the human check, then click Obfuscate.</p>
-                <p>4. Copy, download, or share a loadstring link (Lua 5.1 only).</p>
-                <p>5. Pick an accent color up top if you want — it's saved automatically.</p>
-            </div>
-            <div id="d-apikey" class="dpanel">
-                <h3>Free API key</h3>
-                <p>Generate a personal key to raise your rate limit on /api/obfuscate from 5 to 30 requests/min. Free, no signup.</p>
-                <div id="keyDisplay" class="key-box" style="display:none;"></div>
-                <button id="genKeyBtn" type="button">Generate key</button>
-                <button id="copyKeyBtn" type="button" style="display:none;">Copy key</button>
-            </div>
-            <div id="d-history" class="dpanel">
-                <h3>Recent obfuscations</h3>
-                <div id="historyList"></div>
-            </div>
-        </div>
-    </div>
-
     <script>
-        const input = document.getElementById('luaInput');
-        const runBtn = document.getElementById('runBtn');
-        const clearBtn = document.getElementById('clearBtn');
-        const sampleBtn = document.getElementById('sampleBtn');
-        const shareBtn = document.getElementById('shareBtn');
-        const loading = document.getElementById('loading');
-        const resultSection = document.getElementById('resultSection');
-        const resultCode = document.getElementById('resultCode');
-        const errDetail = document.getElementById('errDetail');
-        const copyBtn = document.getElementById('copyBtn');
-        const downloadLink = document.getElementById('downloadLink');
-        const toast = document.getElementById('toast');
-        const fileUpload = document.getElementById('fileUpload');
-        const uploadLink = document.getElementById('uploadLink');
-        const counter = document.getElementById('counter');
-        const estimate = document.getElementById('estimate');
-        const presetGroup = document.getElementById('presetGroup');
-        const luaVersionGroup = document.getElementById('luaVersionGroup');
-        const luauHint = document.getElementById('luauHint');
+        /* ── refs ── */
+        const flipcard       = document.getElementById('flipcard');
+        const menuBtn        = document.getElementById('menuBtn');
+        const backBtn        = document.getElementById('backBtn');
+        const runBtn         = document.getElementById('runBtn');
+        const clearBtn       = document.getElementById('clearBtn');
+        const sampleBtn      = document.getElementById('sampleBtn');
+        const loading        = document.getElementById('loading');
+        const resultSection  = document.getElementById('resultSection');
+        const resultCode     = document.getElementById('resultCode');
+        const errDetail      = document.getElementById('errDetail');
+        const copyBtn        = document.getElementById('copyBtn');
+        const downloadLink   = document.getElementById('downloadLink');
+        const shareActions   = document.getElementById('shareActions');
+        const shareBtn       = document.getElementById('shareBtn');
+        const copyLoaderBtn  = document.getElementById('copyLoaderBtn');
+        const copyUrlBtn     = document.getElementById('copyUrlBtn');
+        const fileUpload     = document.getElementById('fileUpload');
+        const uploadLink     = document.getElementById('uploadLink');
+        const counter        = document.getElementById('counter');
+        const presetGroup    = document.getElementById('presetGroup');
+        const presetHint     = document.getElementById('presetHint');
+        const luaVersionGroup= document.getElementById('luaVersionGroup');
+        const luauHint       = document.getElementById('luauHint');
+        const toast          = document.getElementById('toast');
+        const backTabs       = document.querySelectorAll('.btab');
+        const backSlider     = document.getElementById('backSlider');
+        const genKeyBtn      = document.getElementById('genKeyBtn');
+        const copyKeyBtn     = document.getElementById('copyKeyBtn');
+        const keyDisplay     = document.getElementById('keyDisplay');
+        const historyList    = document.getElementById('historyList');
 
         let lastObfuscatedCode = '';
-        let selectedPreset = 'Medium';
+        let lastLoaderUrl      = '';
+        let lastLoaderScript   = '';
+        let selectedPreset     = 'Medium';
         let selectedLuaVersion = 'lua51';
+        let isLuaU             = false;
 
-        // ---------- CodeMirror editor ----------
-        const cm = CodeMirror.fromTextArea(input, {
+        /* ── flip ── */
+        menuBtn.addEventListener('click', () => {
+            flipcard.classList.add('flipped');
+            renderHistory();
+        });
+        backBtn.addEventListener('click', () => {
+            flipcard.classList.remove('flipped');
+        });
+
+        /* ── back tab slider ── */
+        let activeTabIdx = 0;
+        function goToTab(idx) {
+            activeTabIdx = idx;
+            backSlider.style.transform = 'translateX(-' + (idx * 100) + '%)';
+            backTabs.forEach((t, i) => t.classList.toggle('active', i === idx));
+        }
+        backTabs.forEach(t => {
+            t.addEventListener('click', () => goToTab(parseInt(t.dataset.idx)));
+        });
+
+        /* ── CodeMirror ── */
+        const cm = CodeMirror.fromTextArea(document.getElementById('luaInput'), {
             mode: 'lua',
             theme: 'sttar',
             lineNumbers: true,
             tabSize: 4,
             placeholder: '-- paste your Lua script here'
         });
+        cm.on('change', () => {
+            const val  = cm.getValue();
+            const lines = val.length ? val.split('\\n').length : 0;
+            counter.textContent = lines + ' lines · ' + val.length.toLocaleString() + ' chars';
+        });
 
-        const SIZE_MULTIPLIER = { Minify: 1.05, Weak: 1.6, Medium: 2.4, Strong: 3.5 };
-        function updateCounterAndEstimate() {
-            const text = cm.getValue();
-            const lines = text.length ? text.split('\\n').length : 0;
-            const chars = text.length;
-            counter.textContent = lines + ' lines · ' + chars + ' chars';
-            const est = Math.round(chars * (SIZE_MULTIPLIER[selectedPreset] || 1));
-            estimate.textContent = 'Est. output: ~' + est.toLocaleString() + ' chars';
-        }
-        cm.on('change', updateCounterAndEstimate);
-        updateCounterAndEstimate();
-
+        /* ── preset pills ── */
+        const PRESET_HINTS = {
+            Minify:  'Removes whitespace and comments only. Smallest output.',
+            Weak:    'Adds light obfuscation. Fast, small output.',
+            Medium:  'Balanced protection and output size.',
+            Strong:  'Maximum protection. Larger output, may be slower.'
+        };
         function wireGroup(group, onSelect) {
             group.querySelectorAll('.pill').forEach(p => {
                 p.addEventListener('click', () => {
@@ -753,61 +919,85 @@ app.get('/home', (req, res) => {
                 });
             });
         }
-
-        wireGroup(presetGroup, (val) => { selectedPreset = val; updateCounterAndEstimate(); });
-        wireGroup(luaVersionGroup, (val) => {
+        wireGroup(presetGroup, val => {
+            selectedPreset = val;
+            presetHint.textContent = PRESET_HINTS[val] || '';
+        });
+        wireGroup(luaVersionGroup, val => {
             selectedLuaVersion = val;
-            const isLuau = val === 'luau';
-            luauHint.style.display = isLuau ? 'block' : 'none';
-            if (isLuau) {
-                shareBtn.style.display = 'none';
+            isLuaU = (val === 'luau');
+            luauHint.textContent = isLuaU
+                ? 'LuaU — no Share link available.'
+                : 'Lua 5.1 — standard. Supports Share link.';
+            if (isLuaU) {
+                shareActions.style.display = 'none';
             } else if (lastObfuscatedCode) {
-                shareBtn.style.display = 'inline-block';
+                shareActions.style.display = 'flex';
             }
         });
 
+        /* ── upload ── */
         uploadLink.addEventListener('click', () => fileUpload.click());
-        fileUpload.addEventListener('change', (e) => {
+        fileUpload.addEventListener('change', e => {
             const file = e.target.files[0];
             if (!file) return;
-            const reader = new FileReader();
-            reader.onload = (ev) => {
-                cm.setValue(ev.target.result);
-                showToast('File loaded.');
-            };
-            reader.readAsText(file);
+            new Promise(res => {
+                const r = new FileReader();
+                r.onload = ev => res(ev.target.result);
+                r.readAsText(file);
+            }).then(text => { cm.setValue(text); showToast('File loaded.'); });
         });
 
+        /* ── sample / clear ── */
         sampleBtn.addEventListener('click', () => {
-            cm.setValue('-- sample script\\nprint("hello from sttar")\\nfor i = 1, 3 do\\n    print("iteration " .. i)\\nend\\nlocal function add(a, b)\\n    return a + b\\nend\\nprint(add(5, 7))');
+            cm.setValue('-- sample script\\nprint("hello from sttar")\\nfor i = 1, 3 do\\n    print("pass " .. i)\\nend\\nlocal function add(a, b)\\n    return a + b\\nend\\nprint(add(5, 7))');
             showToast('Sample loaded.');
         });
-
         clearBtn.addEventListener('click', () => {
             cm.setValue('');
             resultSection.style.display = 'none';
             errDetail.style.display = 'none';
+            shareActions.style.display = 'none';
+            copyLoaderBtn.style.display = 'none';
+            copyUrlBtn.style.display = 'none';
             lastObfuscatedCode = '';
-            shareBtn.style.display = 'none';
         });
 
-        window.onCaptchaSuccess = function() { runBtn.disabled = false; };
-        window.onCaptchaExpired = function() { runBtn.disabled = true; };
+        /* ── captcha ── */
+        window.onCaptchaSuccess  = () => { runBtn.disabled = false; };
+        window.onCaptchaExpired  = () => { runBtn.disabled = true; };
 
+        /* ── helpers ── */
         function getApiKey() {
-            try { return localStorage.getItem('sttar_api_key') || ''; } catch (e) { return ''; }
+            try { return localStorage.getItem('sttar_api_key') || ''; } catch(e) { return ''; }
+        }
+        function showToast(msg, duration) {
+            toast.textContent = msg;
+            toast.className = 'toast show';
+            setTimeout(() => { toast.className = toast.className.replace('show',''); }, duration || 2200);
         }
 
-        runBtn.addEventListener('click', () => {
-            const code = cm.getValue().trim();
-            if (!code) { showToast('Please enter some Lua code.'); return; }
-            const recaptchaToken = grecaptcha.getResponse();
-            if (!recaptchaToken) { showToast('Please verify you are not a robot.'); return; }
+        /* ── obfuscate ── */
+        runBtn.addEventListener('click', doObfuscate);
+        document.addEventListener('keydown', e => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !runBtn.disabled) {
+                e.preventDefault();
+                doObfuscate();
+            }
+        });
 
-            loading.style.display = 'flex';
+        function doObfuscate() {
+            const code = cm.getValue().trim();
+            if (!code) { showToast('Paste some Lua code first.'); return; }
+            const token = grecaptcha.getResponse();
+            if (!token) { showToast('Verify the captcha first.'); return; }
+
+            loading.style.display    = 'flex';
             resultSection.style.display = 'none';
-            errDetail.style.display = 'none';
-            shareBtn.style.display = 'none';
+            errDetail.style.display  = 'none';
+            shareActions.style.display = 'none';
+            copyLoaderBtn.style.display = 'none';
+            copyUrlBtn.style.display    = 'none';
             runBtn.disabled = true;
             grecaptcha.reset();
 
@@ -816,42 +1006,34 @@ app.get('/home', (req, res) => {
             if (key) headers['x-api-key'] = key;
 
             fetch('/api/obfuscate', {
-                method: 'POST',
-                headers,
-                body: JSON.stringify({ code, recaptchaToken, preset: selectedPreset, luaVersion: selectedLuaVersion })
-            })
-            .then(async response => {
-                if (!response.ok) { const err = await response.json(); throw err; }
-                return response.text();
-            })
-            .then(obfuscated => {
-                resultCode.textContent = obfuscated;
-                lastObfuscatedCode = obfuscated;
-                resultSection.style.display = 'block';
-                errDetail.style.display = 'none';
-                shareBtn.style.display = (selectedLuaVersion === 'luau') ? 'none' : 'inline-block';
-
-                const randomStr = Math.random().toString(36).substr(2, 8);
-                const filename = 'Sttar_ObfuscatedCode_' + randomStr + '.lua';
-                const blob = new Blob([obfuscated], { type: 'text/plain' });
-                const url = URL.createObjectURL(blob);
-                downloadLink.href = url;
-                downloadLink.download = filename;
-
-                saveHistoryEntry({
-                    time: new Date().toLocaleString(),
+                method: 'POST', headers,
+                body: JSON.stringify({
+                    code, recaptchaToken: token,
                     preset: selectedPreset,
-                    luaVersion: selectedLuaVersion,
-                    input: code,
-                    output: obfuscated
-                });
+                    luaVersion: selectedLuaVersion
+                })
+            })
+            .then(async r => {
+                if (!r.ok) { const e = await r.json(); throw e; }
+                return r.text();
+            })
+            .then(out => {
+                resultCode.textContent = out;
+                lastObfuscatedCode     = out;
+                resultSection.style.display = 'block';
+                if (!isLuaU) shareActions.style.display = 'flex';
+
+                const rnd = Math.random().toString(36).substr(2, 8);
+                const blob = new Blob([out], { type: 'text/plain' });
+                downloadLink.href     = URL.createObjectURL(blob);
+                downloadLink.download = 'Sttar_' + rnd + '.lua';
+
+                saveHistory({ time: new Date().toLocaleString(), preset: selectedPreset, luaVersion: selectedLuaVersion, input: code, output: out });
             })
             .catch(err => {
-                let msg = err.error || 'Obfuscation failed';
-                let detail = err.detail || '';
-                showToast('Error: ' + msg);
-                if (detail) {
-                    errDetail.textContent = detail;
+                showToast('Error: ' + (err.error || 'Obfuscation failed'));
+                if (err.detail) {
+                    errDetail.textContent = err.detail;
                     errDetail.style.display = 'block';
                 }
             })
@@ -860,177 +1042,108 @@ app.get('/home', (req, res) => {
                 runBtn.disabled = false;
                 if (!grecaptcha.getResponse()) runBtn.disabled = true;
             });
+        }
+
+        /* ── copy ── */
+        copyBtn.addEventListener('click', async () => {
+            try { await navigator.clipboard.writeText(resultCode.textContent); showToast('Copied.'); }
+            catch(e) { showToast('Copy failed.'); }
         });
 
+        /* ── share flow ── */
         shareBtn.addEventListener('click', async () => {
-            if (!lastObfuscatedCode) { showToast('No obfuscated code to share.'); return; }
+            if (!lastObfuscatedCode) { showToast('Nothing to share.'); return; }
             shareBtn.disabled = true;
+            shareBtn.textContent = 'Sharing…';
             try {
-                const response = await fetch('/api/share', {
+                const r = await fetch('/api/share', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ code: lastObfuscatedCode })
                 });
-                if (!response.ok) { const err = await response.json(); throw new Error(err.error || 'Share failed'); }
-                const data = await response.json();
-                await navigator.clipboard.writeText(data.loaderScript);
-                showToast('Loader copied! Paste in executor.');
-            } catch (err) {
+                if (!r.ok) { const e = await r.json(); throw new Error(e.error || 'Share failed'); }
+                const data = await r.json();
+                lastLoaderUrl    = data.loaderUrl;
+                lastLoaderScript = data.loaderScript;
+                copyLoaderBtn.style.display = 'inline-block';
+                copyUrlBtn.style.display    = 'inline-block';
+                shareBtn.textContent = 'Share';
+                showToast('Ready — copy loadstring or URL below.');
+            } catch(err) {
                 showToast('Share error: ' + err.message);
+                shareBtn.textContent = 'Share';
             } finally {
                 shareBtn.disabled = false;
             }
         });
-
-        copyBtn.addEventListener('click', async () => {
-            try {
-                await navigator.clipboard.writeText(resultCode.textContent);
-                showToast('Copied to clipboard!');
-            } catch (err) {
-                showToast('Failed to copy');
-            }
+        copyLoaderBtn.addEventListener('click', async () => {
+            try { await navigator.clipboard.writeText(lastLoaderScript); showToast('Loadstring copied!'); }
+            catch(e) { showToast('Copy failed.'); }
+        });
+        copyUrlBtn.addEventListener('click', async () => {
+            try { await navigator.clipboard.writeText(lastLoaderUrl); showToast('URL copied!'); }
+            catch(e) { showToast('Copy failed.'); }
         });
 
-        function showToast(msg) {
-            toast.textContent = msg;
-            toast.className = 'toast show';
-            setTimeout(() => { toast.className = toast.className.replace('show', ''); }, 2000);
-        }
-
-        // ---------- accent color picker ----------
-        const ACCENT_PRESETS = ['#ffffff', '#bb86fc', '#03dac6', '#5e9eff', '#ffb000'];
-        const accentBtn = document.getElementById('accentBtn');
-        const accentPop = document.getElementById('accentPop');
-        const swatchRow = document.getElementById('swatchRow');
-        const customColor = document.getElementById('customColor');
-
-        function contrastText(hex) {
-            const c = hex.replace('#', '');
-            const r = parseInt(c.substr(0,2), 16), g = parseInt(c.substr(2,2), 16), b = parseInt(c.substr(4,2), 16);
-            const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-            return luminance > 0.6 ? '#000000' : '#ffffff';
-        }
-
-        function applyAccent(hex, save) {
-            document.documentElement.style.setProperty('--accent-user', hex);
-            document.documentElement.style.setProperty('--accent-text', contrastText(hex));
-            customColor.value = hex;
-            swatchRow.querySelectorAll('.swatch').forEach(s => s.classList.toggle('selected', s.dataset.color.toLowerCase() === hex.toLowerCase()));
-            if (save !== false) {
-                try { localStorage.setItem('sttar_accent', hex); } catch (e) {}
-            }
-        }
-
-        ACCENT_PRESETS.forEach(c => {
-            const sw = document.createElement('div');
-            sw.className = 'swatch';
-            sw.style.background = c;
-            sw.dataset.color = c;
-            sw.addEventListener('click', () => applyAccent(c));
-            swatchRow.appendChild(sw);
-        });
-        customColor.addEventListener('input', (e) => applyAccent(e.target.value));
-
-        accentBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            accentPop.classList.toggle('open');
-        });
-        document.addEventListener('click', (e) => {
-            if (!accentPop.contains(e.target) && e.target !== accentBtn) accentPop.classList.remove('open');
-        });
-
-        (function initAccent() {
-            let saved = '#ffffff';
-            try { saved = localStorage.getItem('sttar_accent') || saved; } catch (e) {}
-            applyAccent(saved, false);
-        })();
-
-        // ---------- drawer ----------
-        const menuBtn = document.getElementById('menuBtn');
-        const drawer = document.getElementById('drawer');
-        const drawerClose = document.getElementById('drawerClose');
-        const overlay = document.getElementById('overlay');
-        function openDrawer() { drawer.classList.add('open'); overlay.classList.add('show'); }
-        function closeDrawer() { drawer.classList.remove('open'); overlay.classList.remove('show'); }
-        menuBtn.addEventListener('click', openDrawer);
-        drawerClose.addEventListener('click', closeDrawer);
-        overlay.addEventListener('click', closeDrawer);
-
-        const dtabs = document.querySelectorAll('.dtab');
-        const dpanels = document.querySelectorAll('.dpanel');
-        dtabs.forEach(t => {
-            t.addEventListener('click', () => {
-                dtabs.forEach(x => x.classList.remove('active'));
-                t.classList.add('active');
-                dpanels.forEach(p => p.classList.remove('active'));
-                document.getElementById('d-' + t.dataset.dtab).classList.add('active');
-            });
-        });
-
-        // ---------- free API key ----------
-        const genKeyBtn = document.getElementById('genKeyBtn');
-        const copyKeyBtn = document.getElementById('copyKeyBtn');
-        const keyDisplay = document.getElementById('keyDisplay');
-
+        /* ── API key ── */
         function renderKey(key) {
-            keyDisplay.textContent = key;
-            keyDisplay.style.display = 'block';
-            copyKeyBtn.style.display = 'inline-block';
-            genKeyBtn.textContent = 'Regenerate key';
+            keyDisplay.textContent    = key;
+            keyDisplay.style.display  = 'block';
+            copyKeyBtn.style.display  = 'inline-block';
+            genKeyBtn.textContent     = 'Regenerate key';
         }
         (function initKey() {
-            const existing = getApiKey();
-            if (existing) renderKey(existing);
+            const k = getApiKey();
+            if (k) renderKey(k);
         })();
         genKeyBtn.addEventListener('click', async () => {
             genKeyBtn.disabled = true;
             try {
-                const res = await fetch('/api/generate-key', { method: 'POST' });
-                if (!res.ok) { const err = await res.json(); throw new Error(err.error || 'Failed to generate key'); }
-                const data = await res.json();
-                try { localStorage.setItem('sttar_api_key', data.apiKey); } catch (e) {}
-                renderKey(data.apiKey);
+                const r = await fetch('/api/generate-key', { method: 'POST' });
+                if (!r.ok) { const e = await r.json(); throw new Error(e.error || 'Failed'); }
+                const d = await r.json();
+                try { localStorage.setItem('sttar_api_key', d.apiKey); } catch(e) {}
+                renderKey(d.apiKey);
                 showToast('API key generated.');
-            } catch (err) {
+            } catch(err) {
                 showToast('Error: ' + err.message);
             } finally {
                 genKeyBtn.disabled = false;
             }
         });
         copyKeyBtn.addEventListener('click', async () => {
-            try { await navigator.clipboard.writeText(getApiKey()); showToast('Key copied.'); } catch (e) { showToast('Copy failed.'); }
+            try { await navigator.clipboard.writeText(getApiKey()); showToast('Key copied.'); }
+            catch(e) { showToast('Copy failed.'); }
         });
 
-        // ---------- client-side history (last 5) ----------
-        const historyList = document.getElementById('historyList');
+        /* ── history ── */
         function getHistory() {
-            try { return JSON.parse(localStorage.getItem('sttar_history') || '[]'); } catch (e) { return []; }
+            try { return JSON.parse(localStorage.getItem('sttar_history') || '[]'); } catch(e) { return []; }
         }
-        function saveHistoryEntry(entry) {
+        function saveHistory(entry) {
             const list = getHistory();
             list.unshift(entry);
-            const trimmed = list.slice(0, 5);
-            try { localStorage.setItem('sttar_history', JSON.stringify(trimmed)); } catch (e) {}
-            renderHistory();
+            try { localStorage.setItem('sttar_history', JSON.stringify(list.slice(0, 5))); } catch(e) {}
         }
         function renderHistory() {
             const list = getHistory();
             historyList.innerHTML = '';
             if (!list.length) {
-                historyList.innerHTML = '<div class="empty-state">No obfuscations yet this browser.</div>';
+                historyList.innerHTML = '<div class="empty-hist">No obfuscations yet in this browser.</div>';
                 return;
             }
-            list.forEach((item) => {
+            list.forEach(item => {
                 const el = document.createElement('div');
                 el.className = 'hist-item';
-                el.innerHTML = '<div class="hi-top"><span>' + item.preset + ' · ' + item.luaVersion + '</span><span>' + item.time + '</span></div>' +
-                    '<div>' + (item.input.slice(0, 60).replace(/</g, '&lt;')) + (item.input.length > 60 ? '…' : '') + '</div>';
+                el.innerHTML =
+                    '<div class="hi-top"><span>' + item.preset + ' · ' + item.luaVersion + '</span><span>' + item.time + '</span></div>' +
+                    '<div class="hi-preview">' + (item.input.slice(0, 72).replace(/</g,'&lt;')) + (item.input.length > 72 ? '…' : '') + '</div>';
                 el.addEventListener('click', () => {
                     cm.setValue(item.input);
                     resultCode.textContent = item.output;
-                    lastObfuscatedCode = item.output;
+                    lastObfuscatedCode     = item.output;
                     resultSection.style.display = 'block';
-                    closeDrawer();
+                    flipcard.classList.remove('flipped');
                     showToast('Loaded from history.');
                 });
                 historyList.appendChild(el);
@@ -1038,6 +1151,7 @@ app.get('/home', (req, res) => {
         }
         renderHistory();
 
+        /* ── click ring animation ── */
         ${CLICK_SCRIPT}
     </script>
 </body>
